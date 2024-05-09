@@ -1,0 +1,183 @@
+{
+    "cola": {
+        "task_id": "cola",
+        "few_shot_split": "train",
+        "few_shot_ids": [0, 18],
+        "few_shot_rationale": [
+            "The sentence has a parallel structure connected by a comma. The subject-verb agreement is followed and the verb tenses are correct. Overall, it follows correct gramatical rules in English.",
+            "Pub is not a type of beverage that one can drink but rather the place where people drink. One correct example would be that `they drank at the pub`."
+        ],
+        "input_keys": ["sentence"],
+        "labels": {
+            "acceptable": 1,
+            "unacceptable": 0
+        },
+        "task_description": "whether it is a grammatically acceptable English sentence"
+    },
+    "mnli": {
+        "task_id": "mnli",
+        "few_shot_split": "train",
+        "few_shot_ids": [0, 3, 8],
+        "few_shot_rationale": [
+            "The premise neither entails nor contradicts the hypothesis.",
+            "The premise entails the hypothesis, given that both point to 'them' as the source or owner of the information.",
+            "Gays and lesbians are homosexual, which is the opposite of heterosexual."
+        ],
+        "input_keys": ["premise", "hypothesis"],
+        "labels": {
+            "entailment": 0,
+            "neutral": 1,
+            "contradiction": 2
+        },
+        "task_description": "whether the premise entails the hypothesis (entailment), contradicts the hypothesis (contradiction), or neither (neutral)"
+    },
+    "mnli_matched": {
+        "task_id": "mnli_matched",
+        "few_shot_split": "validation",
+        "few_shot_ids": [0, 1, 2],
+        "few_shot_rationale": [
+            "The premise neither entails nor contradicts the hypothesis.",
+            "The premise points to a site where Government Executive articles can be searched, where as the second sentence states the opposite.",
+            "The two sentences convey the same mixed feelings towards a person."
+        ],
+        "input_keys": ["premise", "hypothesis"],
+        "labels": {
+            "entailment": 0,
+            "neutral": 1,
+            "contradiction": 2
+        },
+        "task_description": "whether the premise entails the hypothesis (entailment), contradicts the hypothesis (contradiction), or neither (neutral)"
+    },
+    "mnli_mismatched": {
+        "task_id": "mnli_mismatched",
+        "few_shot_split": "validation",
+        "few_shot_ids": [0, 2, 8],
+        "few_shot_rationale": [
+            "The premise states that the contribution was helpful, whereas the conclusion states that opposite.",
+            "The premise states that 'we' serve a meal that includes a florentine terrain, and the second sentence says the same.",
+            "The premise states a phenomenon and the hypothesis states people's attitude towards that phenomenon. The premise neither entails nor contradicts the hypothesis."
+        ],
+        "input_keys": ["premise", "hypothesis"],
+        "labels": {
+            "entailment": 0,
+            "neutral": 1,
+            "contradiction": 2
+        },
+        "task_description": "whether the premise entails the hypothesis (entailment), contradicts the hypothesis (contradiction), or neither (neutral)"
+    },
+    "mrpc": {
+        "task_id": "mrpc",
+        "few_shot_split": "train",
+        "few_shot_ids": [0, 1],
+        "few_shot_rationale": [
+            "Both sentence are saying that Amrozi accuses of his brother who is the only witness of deliberately distorting the evidence.",
+            "The second sentence contains additional information of when Yucaipa bought the chain."
+        ],
+        "input_keys": ["sentence1", "sentence2"],
+        "labels": {
+            "not_equivalent": 0,
+            "equivalent": 1
+        },
+        "task_description": "whether a pair of sentences are semantically equivalent"
+    },
+    "qnli": {
+        "task_id": "qnli",
+        "few_shot_split": "train",
+        "few_shot_ids": [0, 2],
+        "few_shot_rationale": [
+            "The sentence does not provide any information regarding the time when the third Digimon series begin.",
+            "The sentence provides the two things that Popper argue Tarski's theory involves in an evaluation of truth: assertions and the facts to which they refer."
+        ],
+        "input_keys": ["question", "sentence"],
+        "labels": {
+            "entailment": 0,
+            "not_entailment": 1
+        },
+        "task_description": "whether the sentence contains the answer to the question"
+    },
+    "qqp": {
+        "task_id": "qqp",
+        "few_shot_split": "train",
+        "few_shot_ids": [0, 1],
+        "few_shot_rationale": [
+            "The two questions are asking different things.",
+            "Horny emotions is the same as horniness and both sentences are asking about how to control it."
+        ],
+        "input_keys": ["question1", "question2"],
+        "labels": {
+            "not_duplicate": 0,
+            "duplicate": 1
+        },
+        "task_description": "whether a pair of questions are semantically equivalent"
+    },
+    "rte": {
+        "task_id": "rte",
+        "few_shot_split": "train",
+        "few_shot_ids": [0, 1],
+        "few_shot_rationale": [
+            "The two sentences have opposite meanings.",
+            "Pope Benedict XVI is the new pope, and pope is the leader of Roman Catholic Church. Therefore, the second sentence entails the first sentence."
+        ],
+        "input_keys": ["sentence1", "sentence2"],
+        "labels": {
+            "entailment": 0,
+            "not_entailment": 1
+        },
+        "task_description": "whether the first sentence entails the second sentence"
+    },
+    "sst2": {
+        "task_id": "sst2",
+        "few_shot_split": "train",
+        "few_shot_ids": [1, 2],
+        "few_shot_rationale": [
+            "Saying something contains no wit expresses a negative attitude.",
+            "It says human nature is beautiful."
+        ],
+        "input_keys": ["sentence"],
+        "labels": {
+            "negative": 0,
+            "positive": 1
+        },
+        "task_description": "whether the sentiment of the sentence is positive or negative"
+    },
+    "stsb": {
+        "task_id": "stsb",
+        "few_shot_split": "train",
+        "few_shot_ids": [0, 29, 32, 74, 45, 141],
+        "few_shot_rationale": [
+            "Both sentences are saying that an airplain is taking off.",
+            "Both sentences are saying that a girl is flying a kite. However, the second sentence contains a bit of extra information, i.e., that the girl is also running.",
+            "Both sentences mention that a women is dancing and singing. However, the first sentence metion that there is someone else while the second sentence talks about the weather.",
+            "The women is peeling something according to both sentences, but the sentences disagree as to what the woman is peeling.",
+            "Both sentences involves a person playing a musical instrument. But the gender of the person and the intrument are both different in the two sentences.",
+            "The two sentences are about entirely different things."
+        ],
+        "input_keys": ["sentence1", "sentence2"],
+        "labels": {
+            "0": 0,
+            "1": 1,
+            "2": 2,
+            "3": 3,
+            "4": 4,
+            "5": 5
+        },
+        "task_description": "the similarity between a pair of sentences, with similarity score ranging between 0 and 5."
+    },
+    "wnli": {
+        "task_id": "wnli",
+        "few_shot_split": "train",
+        "few_shot_ids": [0, 3],
+        "few_shot_rationale": [
+            "The first sentence mentions that when the pin was pulled out from the carrot, 'it' had a hole. Clearly, 'it' refers to carrot given the context.",
+            "The first sentence mentions that Steve is being influenced by Fred, so it is not true that Steve influences someone."
+        ],
+        "input_keys": ["sentence1", "sentence2"],
+        "labels": {
+            "not_entailment": 0,
+            "entailment": 1
+        },
+        "task_description": "whether the first sentence entails the second sentence"
+    }
+}
+
+
