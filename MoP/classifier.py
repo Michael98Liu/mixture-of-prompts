@@ -12,31 +12,47 @@ from promptarray.generator import PromptArrayGenerator
 from .llm import LLM
 
 from .glue_prompt import (
+    FORMAT_FINAL_DECISION,
+    FORMAT_DEFAULT,
+    FORMAT_JSON,
+
+    EXPLICIT_FEWSHOT_TEMPLATE,
+    JSON_FEWSHOT_TEMPLATE,
+
     CLASSIFICATION_TEMPLATE,
-    FEWSHOT_TEMPLATE,
     USER_PROMPT_TWO_SENT,
     CORRECTION_CORRECT_TEMPLATE,
     CORRECTION_MISTAKE_TEMPLATE,
     CORRECTION_ARRAY_TEMPLATE,
     CORRECTION_OR_TEMPLATE,
-    CORRECTION_REASON_TEMPLATE
+    CORRECTION_REASON_TEMPLATE,
+
+    MRPC_CLASSIFY,
+    MRPC_ADDITIONAL_GUIDELINE,
+    MNLI_CLASSIFY
 )
 
 class LLMClassifier:
 
-    def __init__(self, task, taskJson, split, llm, numSeq=1):
+    def __init__(
+        self, task, taskJson, split, llm,
+        resFormat='default', logDir='./log', resultDir='./exp_result', numSeq=1,
+        customizePrompt=False
+    ):
 
         self.task = task
         self.task_obj = taskJson
         self.split = split
         self.inputKeys = self.task_obj['input_keys']
         self.llm = llm
+        self.format = resFormat
         assert(self.task_obj['task_id'] == self.task)
         assert(self.split in ['train', 'validation', 'test'])
+        assert(self.format in ['default', 'json', 'explicit'])
 
         self.dataset = load_dataset("nyu-mll/glue", task)
-        self.outDir = f'./exp_result/{self.llm.model_id.replace("/", "__")}'
-        self.logDir = f'./log/{self.llm.model_id.replace("/", "__")}/'
+        self.outDir = f'{resultDir}/{self.llm.model_id.replace("/", "__")}'
+        self.logDir = f'{logDir}/{self.llm.model_id.replace("/", "__")}'
         self.outFile = f'{self.outDir}/{task}_{self.split}.csv'
         self.logFile = f'{self.logDir}/{task}_{self.split}.jsonl'
 
@@ -50,51 +66,56 @@ class LLMClassifier:
             self.results = pd.DataFrame([], columns=['idx','Classification','correct','mistake','vote','array','single', 'reason'])
         
         self.response = None
-        self.response_agg = None # response as a result of majority vote
+        self.response_agg = '' # response as a result of majority vote
         self.isCorrect = None
         self.reflections = []
         self.numSeq = numSeq # number of sequences to generate
 
         self.outcomes = {
-            'label': list(self.task_obj['labels'].keys())
+            'label': [x.replace('_', ' ') for x in list(self.task_obj['labels'].keys())]
         }
-        self.outcomeMap = self.task_obj['labels'] # map from text to integer class label
+        self.outcomeMap = {k.replace('_', ' '): v for k, v in self.task_obj['labels'].items()} # map from text to integer class label
         self.reverseMap = {v: k for k, v in self.outcomeMap.items()} # map from integer class label to text
+
+        # initializing prompts for classification and fewshot #
+        if self.format == 'default':
+            self.outcomePrompt = FORMAT_DEFAULT
+            self.fewShotTemplate = EXPLICIT_FEWSHOT_TEMPLATE
+        elif self.format == 'json':
+            self.outcomePrompt = FORMAT_JSON.format(choices=self._formatChoices(self.task_obj['labels'].keys()))
+            self.fewShotTemplate = JSON_FEWSHOT_TEMPLATE
+        elif self.format == 'explicit':
+            self.outcomePrompt = FORMAT_FINAL_DECISION.format(choices=self._formatChoices(self.task_obj['labels'].keys()))
+            self.fewShotTemplate = EXPLICIT_FEWSHOT_TEMPLATE
+        # initializing prompts end #
 
         self.fewShotExamples = self._buildFewShot(self.task_obj['few_shot_ids'], self.task_obj['few_shot_rationale'], self.task_obj['few_shot_split'])
 
-        # initializing prompts #
-        self.classifyPrompt = CLASSIFICATION_TEMPLATE.format(
-            task=self.task_obj['task_description'],
-            choices=self._formatChoices(self.task_obj['labels'].keys())
-        )
-        self.corrCorrectPrompt = CORRECTION_CORRECT_TEMPLATE.format(
-            task=self.task_obj['task_description'],
-            choices=self._formatChoices(self.task_obj['labels'].keys())
-        )
-        self.corrMistakePrompt = CORRECTION_MISTAKE_TEMPLATE.format(
-            task=self.task_obj['task_description'],
-            choices=self._formatChoices(self.task_obj['labels'].keys())
-        )
-        self.corrArrayPrompt = CORRECTION_ARRAY_TEMPLATE.format(
-            task=self.task_obj['task_description'],
-            choices=self._formatChoices(self.task_obj['labels'].keys())
-        )
-        self.corrOrPrompt = CORRECTION_OR_TEMPLATE.format(
-            task=self.task_obj['task_description'],
-            choices=self._formatChoices(self.task_obj['labels'].keys())
-        )
-        self.corrReasonPrompt = CORRECTION_REASON_TEMPLATE.format(
-            task=self.task_obj['task_description'],
-            choices=self._formatChoices(self.task_obj['labels'].keys())
-        )
+        if customizePrompt==False:
+            self.classifyPrompt = '\n'.join([CLASSIFICATION_TEMPLATE.format(task=self.task_obj['task_description']), self.outcomePrompt])
+        else:
+            # using customized prompt
+            if self.task == 'mrpc':
+                self.classifyPrompt = '\n'.join([MRPC_ADDITIONAL_GUIDELINE, self.outcomePrompt])
+            elif self.task == 'mnli':
+                self.classifyPrompt = '\n'.join([MNLI_CLASSIFY, self.outcomePrompt])
+            else:
+                raise ValueError('Customized prompt undefined for task')
 
-        # print( self.classifyPrompt, end='\n\n')
+        self.corrCorrectPrompt = '\n'.join([CORRECTION_CORRECT_TEMPLATE.format(task=self.task_obj['task_description']), self.outcomePrompt])
+        self.corrMistakePrompt = '\n'.join([CORRECTION_MISTAKE_TEMPLATE.format(task=self.task_obj['task_description']), self.outcomePrompt])
+        self.corrArrayPrompt = '\n'.join([CORRECTION_ARRAY_TEMPLATE.format(task=self.task_obj['task_description']), self.outcomePrompt])
+        self.corrOrPrompt = '\n'.join([CORRECTION_OR_TEMPLATE.format(task=self.task_obj['task_description']), self.outcomePrompt])
+        self.corrReasonPrompt = '\n'.join([CORRECTION_REASON_TEMPLATE.format(
+            task=self.task_obj['task_description'], choices=self._formatChoices(self.task_obj['labels'].keys())), self.outcomePrompt])
+
+
+        print('Classification prompt:', self.classifyPrompt, end='\n\n')
         # print( self.corrReasonPrompt)
 
     def _formatChoices(self, choices):
 
-        choices = list(choices)
+        choices = [x.replace('_', ' ') for x in choices]
 
         if len(choices) == 2:
             return ' or '.join(choices)
@@ -144,15 +165,22 @@ class LLMClassifier:
 
         mapResult = lambda x: self.outcomeMap[x.strip()]
 
-        responses = [x.lower().replace('<|eot_id|>','').split('my final decision is:')[-1].strip(',.; \n\t\v\r\f') for x in responses]
-        responses = [x.split('\n')[0].strip(',.; \n\t\v\r\f') for x in responses]
+        if self.format == 'explicit':
+            responses = [x.lower().replace('<|eot_id|>','').split('my final decision is:')[-1].strip(',.; \n\t\v\r\f') for x in responses]
+            responses = [x.split('\n')[0].strip(',.; \n\t\v\r\f') for x in responses]
+        elif self.format == 'json':
+            responses = [json.loads(x)['label'].strip() for x in responses]
+        elif self.format == 'default':
+            pass
+        else:
+            raise ValueError('Unrecognized format')
 
         res = []
         for x in responses:
             try:
                 res.append(mapResult(x)) # ensure outcome is one of the potential outcomes
             except Exception as e:
-                print(e, x)
+                print("Error is", e, "Response was", x)
                 continue
 
         print(f'{len(res)} out of {len(responses)} has the correct format')
@@ -172,7 +200,7 @@ class LLMClassifier:
         for seq, idx in enumerate(ids):
             
             text = self._formatInput(idx, split=split)
-            response = FEWSHOT_TEMPLATE.format(
+            response = self.fewShotTemplate.format(
                 rationale=self.task_obj['few_shot_rationale'][seq],
                 label=self.reverseMap[self.dataset[split][idx]['label']]
             )
@@ -211,6 +239,7 @@ class LLMClassifier:
                 'Trial': trial,
                 'Success': success
             }))
+            f.write('\n')
 
     def _arrayCorrection(self, userPrompt, maxTries=3, verbose=True):
 
@@ -229,7 +258,7 @@ class LLMClassifier:
                     self.corrArrayPrompt, '\n\n',
                     userPrompt.replace('{', ' ').replace('}', ' ').replace('/','-').replace('|',' ').replace('&', '-').replace('~', '-'),
                     '\n\n',
-                    f'Briefly explain your rationale briefly and output your final decision starting with "Therefore, my final decision is: ", followed by {self._formatChoices(self.task_obj["labels"].keys())}.'
+                    f'First explain your rationale and then output your final decision starting with "Therefore, my final decision is: ", followed by {self._formatChoices(self.task_obj["labels"].keys())}.'
                 ])
 
                 response = arrayGenerate(
@@ -255,6 +284,8 @@ class LLMClassifier:
 
     def classify(self, idx, maxTries=3, **kwargs):
 
+        print(f'Classifying {idx} ...')
+
         if idx in self.results.idx: return 1
 
         try:
@@ -272,8 +303,9 @@ class LLMClassifier:
 
             return 1 # successfully classified
 
-        except Exception as e:
-            print('ERROR: classification failed', e)
+        except ValueError:
+            print('ERROR: classification failed')
+            self._addResult(idx)
 
             return 0 # failed
 
@@ -282,10 +314,14 @@ class LLMClassifier:
         assert(mode in ['vote', 'array', 'single', 'reason'])
 
         if not pd.isna(self.results.loc[idx, mode]):
-            print(f'skipping {idx} {mode}')
+            print(f'skipping {idx} {mode}; exists')
             return
 
         prevResponse = self.results.query(f'idx == {idx}').Classification.values[0]
+
+        if prevResponse=='':
+            print(f'skipping {idx} {mode}; was not able to classify')
+            return
 
         print(f'Mode: {mode} | Correcting {idx} ...', end='\t')
         print(f'Previous class was {prevResponse} (i.e., {self.reverseMap[prevResponse]})')
@@ -299,50 +335,58 @@ class LLMClassifier:
         elif mode=='vote':
 
             responses = []
+            try:
+                correctResponse = self.promptLLM(
+                    systemPrompt=self.corrCorrectPrompt,
+                    fewShots=[],
+                    userPrompt=userPrompt,
+                    maxTries=maxTries,
+                    parser=self._parseClassification,
+                    **kwargs
+                )
+                responses.extend(correctResponse)
+                self._addCorrection(idx, 'correct')
 
-            correctResponse = self.promptLLM(
-                systemPrompt=self.corrCorrectPrompt,
-                fewShots=[],
-                userPrompt=userPrompt,
-                maxTries=maxTries,
-                parser=self._parseClassification,
-                **kwargs
-            )
-            responses.extend(correctResponse)
-            self._addCorrection(idx, 'correct')
-
-            mistakeResponse = self.promptLLM(
-                systemPrompt=self.corrMistakePrompt,
-                fewShots=[],
-                userPrompt=userPrompt,
-                maxTries=maxTries,
-                parser=self._parseClassification,
-                **kwargs
-            )
-            responses.extend(mistakeResponse)
-            self._addCorrection(idx, 'mistake')
+                mistakeResponse = self.promptLLM(
+                    systemPrompt=self.corrMistakePrompt,
+                    fewShots=[],
+                    userPrompt=userPrompt,
+                    maxTries=maxTries,
+                    parser=self._parseClassification,
+                    **kwargs
+                )
+                responses.extend(mistakeResponse)
+                self._addCorrection(idx, 'mistake')
+            except ValueError:
+                responses = []
 
         elif mode=='single':
-
-            responses = self.promptLLM(
-                systemPrompt=self.corrOrPrompt,
-                fewShots=[],
-                userPrompt=userPrompt,
-                maxTries=maxTries,
-                parser=self._parseClassification,
-                **kwargs
-            )
+            
+            try:
+                responses = self.promptLLM(
+                    systemPrompt=self.corrOrPrompt,
+                    fewShots=[],
+                    userPrompt=userPrompt,
+                    maxTries=maxTries,
+                    parser=self._parseClassification,
+                    **kwargs
+                )
+            except ValueError:
+                responses = []
 
         elif mode=='reason':
-
-            responses = self.promptLLM(
-                systemPrompt=self.corrReasonPrompt,
-                fewShots=[],
-                userPrompt=userPrompt,
-                maxTries=maxTries,
-                parser=self._parseClassification,
-                **kwargs
-            )
+            
+            try:
+                responses = self.promptLLM(
+                    systemPrompt=self.corrReasonPrompt,
+                    fewShots=[],
+                    userPrompt=userPrompt,
+                    maxTries=maxTries,
+                    parser=self._parseClassification,
+                    **kwargs
+                )
+            except ValueError:
+                responses = []
 
         try:
             tied = self._parseClassification(responses)

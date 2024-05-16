@@ -7,22 +7,26 @@ from tqdm.notebook import tqdm
 from MoP.classifier import LLMClassifier
 from MoP.llm import LLM
 
-def runClassification(task, split, llm):
+def runClassification(
+    task, split, llm, resFormat, logDir, resultDir, taskFile,
+    correctionModes=['array', 'vote', 'single', 'reason'], customizePrompt=False
+):
     
-    with open('tasks.json', 'r') as f:
+    with open(taskFile, 'r') as f:
         dataCards = json.load(f)
         
     clf = LLMClassifier(
-        task=task, split=split, taskJson=dataCards[task], llm=llm, numSeq=7
+        task=task, split=split, resFormat=resFormat, taskJson=dataCards[task],
+        llm=llm, numSeq=7, logDir=logDir, resultDir=resultDir, customizePrompt=customizePrompt
     )
     
-    print(task, clf.dataset[split], flush=True)
+    print(task, split, resFormat, clf.dataset[split], flush=True)
     
-    for idx in range(min(1000, len(clf.dataset[split]))):
+    for idx in range(min(500, len(clf.dataset[split]))):
         
         clf.classify(idx)
         
-        for mode in ['vote', 'array', 'single', 'reason']:
+        for mode in correctionModes: 
             clf.correction(idx, mode)
             
         print(flush=True)
