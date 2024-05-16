@@ -65,7 +65,7 @@ class LLMClassifier:
         else:
             self.results = pd.DataFrame([], columns=['idx','Classification','correct','mistake','vote','array','single', 'reason'])
         
-        self.response = None
+        self.response = None # classification responses
         self.response_agg = '' # response as a result of majority vote
         self.isCorrect = None
         self.reflections = []
@@ -161,13 +161,15 @@ class LLMClassifier:
 
     def _parseClassification(self, responses):
 
+        # update self.response_agg to be the parsed result
+        # return wether there is a tie or not
+
         # print('Responses:', responses)
 
         mapResult = lambda x: self.outcomeMap[x.strip()]
 
         if self.format == 'explicit':
-            responses = [x.lower().replace('<|eot_id|>','').split('my final decision is:')[-1].strip(',.; \n\t\v\r\f') for x in responses]
-            responses = [x.split('\n')[0].strip(',.; \n\t\v\r\f') for x in responses]
+            responses = [self._cleanResponse(x) for x in responses]
         elif self.format == 'json':
             responses = [json.loads(x)['label'].strip() for x in responses]
         elif self.format == 'default':
@@ -222,17 +224,19 @@ class LLMClassifier:
         )
         self._dumpResult()
 
-    def _addCorrection(self, idx, mode):
+    def _addCorrectionResult(self, idx, mode):
         self.results.loc[idx, mode] = self.response_agg
         self._dumpResult()
 
     def _dumpResult(self):
         self.results.to_csv(self.outFile, index=False)
 
-    def _recordLog(self, prompt, response, trial, classification, success):
+    def _recordLog(self, idx, mode, prompt, response, trial, classification, success):
 
         with open(self.logFile, 'a') as f:
             f.write(json.dumps({
+                'idx': idx,
+                'Mode': mode,
                 'Prompt': prompt,
                 'Response': response,
                 'Classification': classification,
@@ -241,7 +245,7 @@ class LLMClassifier:
             }))
             f.write('\n')
 
-    def _arrayCorrection(self, userPrompt, maxTries=3, verbose=True):
+    def _arrayCorrection(self, idx, userPrompt, maxTries=3, verbose=False):
 
         tries=0
         response=''
@@ -268,12 +272,12 @@ class LLMClassifier:
                 )
 
                 self._parseClassification(response)
-                self._recordLog(prompt=jointPrompt, response=response, trial=tries, classification=self.response_agg, success=True)
+                self._recordLog(idx=idx, prompt=jointPrompt, mode='array', response=response, trial=tries, classification=self.response_agg, success=True)
 
                 return response
 
             except Exception as e:
-                self._recordLog(prompt=jointPrompt, response=response, trial=tries, classification=None, success=False)
+                self._recordLog(idx=idx, prompt=jointPrompt, mode='array', response=response, trial=tries, classification=None, success=False)
 
                 tries += 1
                 print(f"ERROR array correction on try {tries}:", e)
@@ -281,6 +285,37 @@ class LLMClassifier:
         if tries==maxTries:
             print('WARNING: Maximum retries reached with promptarray. Did not correct.')
             return []
+
+    def _cleanResponse(self, res):
+        res = res.lower().replace('<|eot_id|>','').split('my final decision is:')[-1].strip(',.; \n\t\v\r\f')
+        res = res.split('\n')[0].strip(',.; \n\t\v\r\f')
+        return res
+
+    def _getOneResponse(self, classification):
+
+        for res in self.response:
+
+            cleaned = self._cleanResponse(res)
+
+            if classification.strip().lower() == cleaned:
+                return res
+
+        print('Warning: cannot find the classification in any responses. Returning the first one.')
+
+        return self.response[0]
+
+    def _loadClassificationLog(self, idx):
+        print('Loading previous classification from log ...')
+
+        with open(self.logFile, 'r') as f:
+            for line in f:
+                m = json.loads(line)
+                if int(m['idx']) == idx and m['Mode'] == 'classify':
+                    self.response = m['Response']
+                    self.response_agg = m['Classification']
+                    return
+
+        print('ERROR. Cannot load previous classification from log.')
 
     def classify(self, idx, maxTries=3, **kwargs):
 
@@ -291,6 +326,8 @@ class LLMClassifier:
         try:
 
             self.response = self.promptLLM(
+                idx=idx,
+                mode='classify',
                 systemPrompt=self.classifyPrompt,
                 fewShots=self.fewShotExamples,
                 userPrompt=self._formatInput(idx),
@@ -309,7 +346,7 @@ class LLMClassifier:
 
             return 0 # failed
 
-    def correction(self, idx, mode, maxTries=3, verbose=True, **kwargs):
+    def correction(self, idx: str, mode: str, maxTries=3, verbose=True, **kwargs):
 
         assert(mode in ['vote', 'array', 'single', 'reason'])
 
@@ -317,26 +354,35 @@ class LLMClassifier:
             print(f'skipping {idx} {mode}; exists')
             return
 
-        prevResponse = self.results.query(f'idx == {idx}').Classification.values[0]
+        if self.response is None:
+            self._loadClassificationLog(idx)
 
-        if prevResponse=='':
+        prevClassification = self.results.query(f'idx == {idx}').Classification.values[0]
+
+        if prevClassification != self.response_agg:
+            print('ERROR: previous classification does not aggree.', prevClassification, self.response_agg)
+
+        if prevClassification=='':
             print(f'skipping {idx} {mode}; was not able to classify')
             return
 
         print(f'Mode: {mode} | Correcting {idx} ...', end='\t')
-        print(f'Previous class was {prevResponse} (i.e., {self.reverseMap[prevResponse]})')
-
-        userPrompt = f"The input was: {self._formatInput(idx)} \nYour decision was: {self.reverseMap[prevResponse]}\n"
+        print(f'Previous class was {prevClassification} (i.e., {self.reverseMap[prevClassification]})')
+        
+        prevResponse = self._getOneResponse(classification=self.reverseMap[prevClassification])
+        userPrompt = f"The input was: {self._formatInput(idx)} \nYour decision was: {self.reverseMap[prevClassification]}\nYour response was: {prevResponse}\n"
         
         if mode=='array':
 
-            responses = self._arrayCorrection(userPrompt=userPrompt)
+            responses = self._arrayCorrection(idx=idx, userPrompt=userPrompt)
 
         elif mode=='vote':
 
             responses = []
             try:
                 correctResponse = self.promptLLM(
+                    idx=idx,
+                    mode='correct',
                     systemPrompt=self.corrCorrectPrompt,
                     fewShots=[],
                     userPrompt=userPrompt,
@@ -345,9 +391,11 @@ class LLMClassifier:
                     **kwargs
                 )
                 responses.extend(correctResponse)
-                self._addCorrection(idx, 'correct')
+                self._addCorrectionResult(idx, 'correct')
 
                 mistakeResponse = self.promptLLM(
+                    idx=idx,
+                    mode='mistake',
                     systemPrompt=self.corrMistakePrompt,
                     fewShots=[],
                     userPrompt=userPrompt,
@@ -356,7 +404,7 @@ class LLMClassifier:
                     **kwargs
                 )
                 responses.extend(mistakeResponse)
-                self._addCorrection(idx, 'mistake')
+                self._addCorrectionResult(idx, 'mistake')
             except ValueError:
                 responses = []
 
@@ -364,6 +412,8 @@ class LLMClassifier:
             
             try:
                 responses = self.promptLLM(
+                    idx=idx,
+                    mode=mode,
                     systemPrompt=self.corrOrPrompt,
                     fewShots=[],
                     userPrompt=userPrompt,
@@ -378,6 +428,8 @@ class LLMClassifier:
             
             try:
                 responses = self.promptLLM(
+                    idx=idx,
+                    mode=mode,
                     systemPrompt=self.corrReasonPrompt,
                     fewShots=[],
                     userPrompt=userPrompt,
@@ -390,10 +442,10 @@ class LLMClassifier:
 
         try:
             tied = self._parseClassification(responses)
-            self._addCorrection(idx, mode)
+            self._addCorrectionResult(idx, mode)
 
             if tied is True:
-                self.response_agg = prevResponse
+                self.response_agg = prevClassification
                 print(f'Tie exists. Did not correct. Class is {self.response_agg}')
             else:
                 print(f'Corrected classification is {self.response_agg}')
@@ -401,7 +453,7 @@ class LLMClassifier:
             print(f"{self.task} {self.split} {idx} {mode} ERROR. Did not correct")
         
 
-    def promptLLM(self, systemPrompt, fewShots, userPrompt, parser, maxTries=3, **kwargs):
+    def promptLLM(self, idx, mode, systemPrompt, fewShots, userPrompt, parser, maxTries=3, **kwargs):
 
         messages = [{'role':'system', 'content': systemPrompt}]
 
@@ -421,11 +473,11 @@ class LLMClassifier:
                 response = self.llm.prompt(formatted, numSeq=self.numSeq, **kwargs)
                 parser(response) # ensure that the outcome is the right format
 
-                self._recordLog(prompt=formatted, response=response, trial=tries, classification=self.response_agg, success=True)
+                self._recordLog(idx=idx, mode=mode, prompt=formatted, response=response, trial=tries, classification=self.response_agg, success=True)
                 return response
 
             except Exception as e:
-                self._recordLog(prompt=formatted, response=response, trial=tries, classification=None, success=False)
+                self._recordLog(idx=idx, mode=mode, prompt=formatted, response=response, trial=tries, classification=None, success=False)
 
                 tries += 1
                 print(f"Tried {tries} times. ERROR", e)
