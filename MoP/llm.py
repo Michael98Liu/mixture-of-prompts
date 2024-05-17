@@ -18,6 +18,11 @@ class LLM:
     def __init__(self, model_id,
                  model_cache_dir='/scratch/fl1092/huggingface/hub/',
                  result_cache_dir='./log/{model}/',
+                 do_sample=True,
+                 num_beams=1,
+                 temperature=1,
+                 top_k=50,
+                 top_p=1
                 ):
         
         self.model_id = model_id
@@ -29,6 +34,18 @@ class LLM:
         
         self._load_basemodel(model_cache_dir)
         print(f'Model {self.model_id} loaded to', self.model.device, flush=True)
+
+        self.do_sample = do_sample
+        self.num_beams = num_beams
+        self.temperature = temperature
+        self.top_k = top_k
+        self.top_p = top_p
+
+        if self.do_sample==False:
+            # using default values
+            self.temperature = 1
+            self.top_k = 50
+            self.top_p = 1
        
         self.pipeline = transformers.pipeline(
             "text-generation",
@@ -36,7 +53,7 @@ class LLM:
             tokenizer=self.tokenizer,
             torch_dtype=torch.float16,
             device_map="auto",
-            do_sample=True,
+            do_sample=self.do_sample,
             batch_size=4
         )
 
@@ -122,10 +139,12 @@ class LLM:
 
         sequences = self.pipeline(
             messages,
-            do_sample=True,
-            top_k=40,
-            temperature=0.7,
-            num_return_sequences=numSeq,
+            do_sample=self.do_sample,
+            num_beams=self.num_beams,
+            temperature=self.temperature,
+            top_k=self.top_k,
+            top_p=self.top_p,
+            num_return_sequences=numSeq if self.do_sample or self.num_beams>=numSeq else 1,
             eos_token_id=self.terminators,
             pad_token_id=self.pipeline.tokenizer.eos_token_id,
             max_new_tokens=maxNewToken,

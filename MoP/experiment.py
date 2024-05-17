@@ -9,7 +9,7 @@ from MoP.llm import LLM
 
 def runClassification(
     task, split, llm, resFormat, logDir, resultDir, taskFile,
-    correctionModes=['array', 'vote', 'single', 'reason'], customizePrompt=False
+    correctionModes=['array', 'vote', 'single', 'reason'], customizePrompt=False, sampleSize=200
 ):
     
     with open(taskFile, 'r') as f:
@@ -22,7 +22,7 @@ def runClassification(
     
     print(task, split, resFormat, clf.dataset[split], flush=True)
     
-    for idx in range(min(500, len(clf.dataset[split]))):
+    for idx in range(min(sampleSize, len(clf.dataset[split]))):
         
         clf.classify(idx)
         

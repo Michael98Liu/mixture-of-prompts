@@ -32,6 +32,8 @@ from .glue_prompt import (
     MNLI_CLASSIFY
 )
 
+MODES = ['classify', 'correct', 'mistake', 'vote', 'array', 'single', 'reason']
+
 class LLMClassifier:
 
     def __init__(
@@ -51,22 +53,22 @@ class LLMClassifier:
         assert(self.format in ['default', 'json', 'explicit'])
 
         self.dataset = load_dataset("nyu-mll/glue", task)
-        self.outDir = f'{resultDir}/{self.llm.model_id.replace("/", "__")}'
-        self.logDir = f'{logDir}/{self.llm.model_id.replace("/", "__")}'
-        self.outFile = f'{self.outDir}/{task}_{self.split}.csv'
+        self.outDir = f'{resultDir}/{self.llm.model_id.replace("/", "__")}__{llm.do_sample}__{llm.num_beams}__{llm.temperature}__{llm.top_k}__{llm.top_p}/{task}_{self.split}'
+        self.logDir = f'{logDir}/{self.llm.model_id.replace("/", "__")}__{llm.do_sample}__{llm.num_beams}__{llm.temperature}__{llm.top_k}__{llm.top_p}'
         self.logFile = f'{self.logDir}/{task}_{self.split}.jsonl'
 
         os.makedirs(self.outDir, exist_ok=True)
         os.makedirs(self.logDir, exist_ok=True)
 
-        if len(glob.glob(self.outFile)) != 0:
+        if len(glob.glob(f'{self.outDir}/*.csv')) != 0:
             # outfile exists
-            self.results = pd.read_csv(self.outFile)
+            self._loadResults()
         else:
-            self.results = pd.DataFrame([], columns=['idx','Classification','correct','mistake','vote','array','single', 'reason'])
+            self._initializeResults()
         
         self.response = None # classification responses
         self.response_agg = '' # response as a result of majority vote
+        self.score = -1 # confidence score associated with response_agg
         self.isCorrect = None
         self.reflections = []
         self.numSeq = numSeq # number of sequences to generate
@@ -157,7 +159,7 @@ class LLMClassifier:
 
         print("Voting", m)
 
-        return res[0], len(res) != 1 # response, and whether a tie exists
+        return res[0], round(maxCount/len(l), 3), len(res) != 1 # response, score, and whether a tie exists
 
     def _parseClassification(self, responses):
 
@@ -189,7 +191,7 @@ class LLMClassifier:
         if len(res) <= len(responses)/2:
             raise ValueError('Less than half of responses has the correct format')
 
-        self.response_agg, tied = self._mostFrequent(res) # aggregated as a result of majority voting
+        self.response_agg, self.score, tied = self._mostFrequent(res) # aggregated as a result of majority voting
 
         print('Classification:', self.response_agg, 'and tie exists' if tied else 'and no tie')
 
@@ -211,25 +213,36 @@ class LLMClassifier:
         
         return examples
 
-    def _addResult(self, idx):
+    def _loadResults(self):
 
-        self.results = pd.concat(
-            [self.results, pd.DataFrame(
+        self.results = {}
+        for mode in MODES:
+            self.results[mode] = pd.read_csv(f'{self.outDir}/{mode}.csv', index_col=0)
+
+    def _initializeResults(self):
+
+        self.results = {}
+        for mode in MODES:
+            self.results[mode] = pd.DataFrame(columns=['idx', mode, 'label', 'score'])
+            self._dumpResult(mode)
+
+    def _addResult(self, idx, mode):
+
+        self.results[mode] = pd.concat(
+            [self.results[mode], pd.DataFrame(
                 {
                     'idx': idx,
                     'label': self.dataset[self.split][idx]['label'],
-                    'Classification': self.response_agg
+                    mode: self.response_agg,
+                    'score': self.score
                 }, index=[idx])
             ], ignore_index=False
         )
-        self._dumpResult()
+        self._dumpResult(mode)
 
-    def _addCorrectionResult(self, idx, mode):
-        self.results.loc[idx, mode] = self.response_agg
-        self._dumpResult()
+    def _dumpResult(self, mode):
 
-    def _dumpResult(self):
-        self.results.to_csv(self.outFile, index=False)
+        self.results[mode].to_csv(f'{self.outDir}/{mode}.csv', index=True)
 
     def _recordLog(self, idx, mode, prompt, response, trial, classification, success):
 
@@ -268,7 +281,11 @@ class LLMClassifier:
                 response = arrayGenerate(
                     generator,
                     jointPrompt,
-                    bad_words=[], verbose=verbose
+                    bad_words=[], verbose=verbose,
+                    do_sample=self.llm.do_sample,
+                    temperature=self.llm.temperature,
+                    k=self.llm.top_k,
+                    p=self.llm.top_p
                 )
 
                 self._parseClassification(response)
@@ -321,7 +338,7 @@ class LLMClassifier:
 
         print(f'Classifying {idx} ...')
 
-        if idx in self.results.idx: return 1
+        if idx in self.results['classify'].idx: return 1
 
         try:
 
@@ -336,33 +353,30 @@ class LLMClassifier:
                 **kwargs
             )
 
-            self._addResult(idx)
+            self._addResult(idx, mode='classify')
 
             return 1 # successfully classified
 
         except ValueError:
             print('ERROR: classification failed')
-            self._addResult(idx)
+            self._addResult(idx, mode='classify')
 
             return 0 # failed
 
-    def correction(self, idx: str, mode: str, maxTries=3, verbose=True, **kwargs):
+    def correction(self, idx: str, mode: str, maxTries=2, verbose=True, **kwargs):
 
         assert(mode in ['vote', 'array', 'single', 'reason'])
 
-        if not pd.isna(self.results.loc[idx, mode]):
+        if idx in self.results[mode].index and not pd.isna(self.results[mode].loc[idx, mode]):
             print(f'skipping {idx} {mode}; exists')
             return
 
         if self.response is None:
             self._loadClassificationLog(idx)
 
-        prevClassification = self.results.query(f'idx == {idx}').Classification.values[0]
+        prevClassification = self.results['classify'].query(f'idx == {idx}').classify.values[0]
 
-        if prevClassification != self.response_agg:
-            print('ERROR: previous classification does not aggree.', prevClassification, self.response_agg)
-
-        if prevClassification=='':
+        if prevClassification=='' or pd.isna(prevClassification):
             print(f'skipping {idx} {mode}; was not able to classify')
             return
 
@@ -391,7 +405,7 @@ class LLMClassifier:
                     **kwargs
                 )
                 responses.extend(correctResponse)
-                self._addCorrectionResult(idx, 'correct')
+                self._addResult(idx, 'correct')
 
                 mistakeResponse = self.promptLLM(
                     idx=idx,
@@ -404,7 +418,7 @@ class LLMClassifier:
                     **kwargs
                 )
                 responses.extend(mistakeResponse)
-                self._addCorrectionResult(idx, 'mistake')
+                self._addResult(idx, 'mistake')
             except ValueError:
                 responses = []
 
@@ -442,7 +456,7 @@ class LLMClassifier:
 
         try:
             tied = self._parseClassification(responses)
-            self._addCorrectionResult(idx, mode)
+            self._addResult(idx, mode)
 
             if tied is True:
                 self.response_agg = prevClassification
