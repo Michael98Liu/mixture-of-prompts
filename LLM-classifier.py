@@ -6,6 +6,7 @@ import torch
 from MoP.llm import LLM
 from MoP.classifier import LLMClassifier
 from MoP.experiment import runClassification
+from MoP.dataloader import loadMMLU
 
 for i in range(torch.cuda.device_count()):
     print(torch.cuda.get_device_properties(i).name)
@@ -41,9 +42,25 @@ llm = LLM(
     top_p=args.top_p
 )
 
-runClassification(
-    args.task, args.split, llm,
-    resFormat=args.format,
-    logDir=args.logDir, resultDir=args.resultDir, taskFile=args.taskFile,
-    sampleSize=200
-)
+if args.task == 'mmlu':
+    subTasks = list(loadMMLU().keys())
+
+    for subtask in subTasks:
+
+        print(f'Running MMLU task: mmlu-{subtask} ...')
+
+        runClassification(
+            f'mmlu-{subtask}', args.split, llm,
+            resFormat=args.format,
+            logDir=args.logDir, resultDir=args.resultDir, taskFile=args.taskFile,
+            sampleSize=200
+        )
+        print('\n\n\n\n')
+else:
+
+    runClassification(
+        args.task, args.split, llm,
+        resFormat=args.format,
+        logDir=args.logDir, resultDir=args.resultDir, taskFile=args.taskFile,
+        sampleSize=200
+    )

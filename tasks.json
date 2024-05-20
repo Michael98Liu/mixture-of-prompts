@@ -1,4 +1,18 @@
 {
+    "mmlu": {
+        "task_id": "mmlu",
+        "few_shot_split": "dev",
+        "few_shot_ids": [],
+        "few_shot_rationale": [],
+        "input_keys": ["question"],
+        "labels": {
+            "a": "a",
+            "b": "b",
+            "c": "c",
+            "d": "d"
+        },
+        "task_description": "answer some multiple choice questions"
+    },
     "cola": {
         "task_id": "cola",
         "few_shot_split": "train",

@@ -10,27 +10,7 @@ from promptarray.generate import arrayGenerate
 from promptarray.generator import PromptArrayGenerator
 
 from .llm import LLM
-
-from .glue_prompt import (
-    FORMAT_FINAL_DECISION,
-    FORMAT_DEFAULT,
-    FORMAT_JSON,
-
-    EXPLICIT_FEWSHOT_TEMPLATE,
-    JSON_FEWSHOT_TEMPLATE,
-
-    CLASSIFICATION_TEMPLATE,
-    USER_PROMPT_TWO_SENT,
-    CORRECTION_CORRECT_TEMPLATE,
-    CORRECTION_MISTAKE_TEMPLATE,
-    CORRECTION_ARRAY_TEMPLATE,
-    CORRECTION_OR_TEMPLATE,
-    CORRECTION_REASON_TEMPLATE,
-
-    MRPC_CLASSIFY,
-    MRPC_ADDITIONAL_GUIDELINE,
-    MNLI_CLASSIFY
-)
+from .dataloader import loadMMLU
 
 MODES = ['classify', 'correct', 'mistake', 'vote', 'array', 'single', 'reason']
 
@@ -41,8 +21,16 @@ class LLMClassifier:
         resFormat='default', logDir='./log', resultDir='./exp_result', numSeq=1,
         customizePrompt=False
     ):
+        taskList = task.split('-')
+        if len(taskList) == 1:
+            self.task = taskList[0]
+            self.subtask = None
+        elif len(taskList) == 2:
+            self.task, self.subtask = taskList
+        else:
+            print(task)
+            raise ValueError('format of task is wrong')
 
-        self.task = task
         self.task_obj = taskJson
         self.split = split
         self.inputKeys = self.task_obj['input_keys']
@@ -52,7 +40,6 @@ class LLMClassifier:
         assert(self.split in ['train', 'validation', 'test'])
         assert(self.format in ['default', 'json', 'explicit'])
 
-        self.dataset = load_dataset("nyu-mll/glue", task)
         self.outDir = f'{resultDir}/{self.llm.model_id.replace("/", "__")}__{llm.do_sample}__{llm.num_beams}__{llm.temperature}__{llm.top_k}__{llm.top_p}/{task}_{self.split}'
         self.logDir = f'{logDir}/{self.llm.model_id.replace("/", "__")}__{llm.do_sample}__{llm.num_beams}__{llm.temperature}__{llm.top_k}__{llm.top_p}'
         self.logFile = f'{self.logDir}/{task}_{self.split}.jsonl'
@@ -79,6 +66,49 @@ class LLMClassifier:
         self.outcomeMap = {k.replace('_', ' '): v for k, v in self.task_obj['labels'].items()} # map from text to integer class label
         self.reverseMap = {v: k for k, v in self.outcomeMap.items()} # map from integer class label to text
 
+        if self.task == 'mmlu':
+            from .MMLU_prompt import (
+                FORMAT_FINAL_DECISION,
+                FORMAT_DEFAULT,
+                FORMAT_JSON,
+
+                EXPLICIT_FEWSHOT_TEMPLATE,
+                JSON_FEWSHOT_TEMPLATE,
+
+                CLASSIFICATION_TEMPLATE,
+                CORRECTION_CORRECT_TEMPLATE,
+                CORRECTION_MISTAKE_TEMPLATE,
+                CORRECTION_ARRAY_TEMPLATE,
+                CORRECTION_OR_TEMPLATE,
+                CORRECTION_REASON_TEMPLATE,
+            )
+
+            self.dataset = loadMMLU(task=self.subtask)
+
+        else:
+            from .glue_prompt import (
+                FORMAT_FINAL_DECISION,
+                FORMAT_DEFAULT,
+                FORMAT_JSON,
+
+                EXPLICIT_FEWSHOT_TEMPLATE,
+                JSON_FEWSHOT_TEMPLATE,
+
+                CLASSIFICATION_TEMPLATE,
+                USER_PROMPT_TWO_SENT,
+                CORRECTION_CORRECT_TEMPLATE,
+                CORRECTION_MISTAKE_TEMPLATE,
+                CORRECTION_ARRAY_TEMPLATE,
+                CORRECTION_OR_TEMPLATE,
+                CORRECTION_REASON_TEMPLATE,
+
+                MRPC_CLASSIFY,
+                MRPC_ADDITIONAL_GUIDELINE,
+                MNLI_CLASSIFY
+            )
+
+            self.dataset = load_dataset("nyu-mll/glue", task)
+
         # initializing prompts for classification and fewshot #
         if self.format == 'default':
             self.outcomePrompt = FORMAT_DEFAULT
@@ -91,7 +121,10 @@ class LLMClassifier:
             self.fewShotTemplate = EXPLICIT_FEWSHOT_TEMPLATE
         # initializing prompts end #
 
-        self.fewShotExamples = self._buildFewShot(self.task_obj['few_shot_ids'], self.task_obj['few_shot_rationale'], self.task_obj['few_shot_split'])
+        if self.task == 'mmlu':
+            self.fewShotExamples = self._buildFewShotMMLU()
+        else:
+            self.fewShotExamples = self._buildFewShotGLUE(self.task_obj['few_shot_ids'], self.task_obj['few_shot_rationale'], self.task_obj['few_shot_split'])
 
         if customizePrompt==False:
             self.classifyPrompt = '\n'.join([CLASSIFICATION_TEMPLATE.format(task=self.task_obj['task_description']), self.outcomePrompt])
@@ -196,8 +229,17 @@ class LLMClassifier:
         print('Classification:', self.response_agg, 'and tie exists' if tied else 'and no tie')
 
         return tied
-        
-    def _buildFewShot(self, ids, reasons, split='train'):
+
+    def _buildFewShotMMLU(self, split='dev'):
+
+        examples = []
+
+        for data in self.dataset[split]:
+            examples.append([{'role':'user', 'content': data['question']}, {'role':'assistant', 'content': data['label']}])
+
+        return examples
+
+    def _buildFewShotGLUE(self, ids, reasons, split='train'):
 
         examples = []
 
@@ -304,8 +346,13 @@ class LLMClassifier:
             return []
 
     def _cleanResponse(self, res):
+        
         res = res.lower().replace('<|eot_id|>','').split('my final decision is:')[-1].strip(',.; \n\t\v\r\f')
         res = res.split('\n')[0].strip(',.; \n\t\v\r\f')
+
+        if self.task=='mmlu' and len(res) != 1:
+            res = res.split('.')[0].strip()
+
         return res
 
     def _getOneResponse(self, classification):
@@ -388,7 +435,7 @@ class LLMClassifier:
         
         if mode=='array':
 
-            responses = self._arrayCorrection(idx=idx, userPrompt=userPrompt)
+            responses = self._arrayCorrection(idx=idx, userPrompt=userPrompt, maxTries=maxTries)
 
         elif mode=='vote':
 
@@ -491,7 +538,7 @@ class LLMClassifier:
                 return response
 
             except Exception as e:
-                self._recordLog(idx=idx, mode=mode, prompt=formatted, response=response, trial=tries, classification=None, success=False)
+                self._recordLog(idx=idx, mode=mode, prompt=formatted, response=f'ERROR: {e}', trial=tries, classification=None, success=False)
 
                 tries += 1
                 print(f"Tried {tries} times. ERROR", e)

@@ -14,13 +14,15 @@ def runClassification(
     
     with open(taskFile, 'r') as f:
         dataCards = json.load(f)
+
+    superTask = task.split('-')[0]
         
     clf = LLMClassifier(
-        task=task, split=split, resFormat=resFormat, taskJson=dataCards[task],
+        task=task, split=split, resFormat=resFormat, taskJson=dataCards[superTask],
         llm=llm, numSeq=7, logDir=logDir, resultDir=resultDir, customizePrompt=customizePrompt
     )
     
-    print(task, split, resFormat, clf.dataset[split], flush=True)
+    print(task, split, resFormat, flush=True)
     
     for idx in range(min(sampleSize, len(clf.dataset[split]))):
         
