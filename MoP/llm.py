@@ -24,6 +24,10 @@ class LLM:
                  top_k=50,
                  top_p=1
                 ):
+
+        def useInt(x): # use integer value if possible
+            if int(x) == x: return int(x)
+            else: return x
         
         self.model_id = model_id
         self.cache_dir = result_cache_dir.format(model=self.model_id.replace('/', '_'))
@@ -36,10 +40,10 @@ class LLM:
         print(f'Model {self.model_id} loaded to', self.model.device, flush=True)
 
         self.do_sample = do_sample
-        self.num_beams = num_beams
-        self.temperature = temperature
-        self.top_k = top_k
-        self.top_p = top_p
+        self.num_beams = useInt(num_beams)
+        self.temperature = useInt(temperature)
+        self.top_k = useInt(top_k)
+        self.top_p = useInt(top_p)
 
         if self.do_sample==False:
             # using default values
