@@ -18,7 +18,7 @@ def runClassification(
     superTask = task.split('-')[0]
         
     clf = LLMClassifier(
-        task=task, split=split, resFormat=resFormat, taskJson=dataCards[superTask],
+        task=task, split=split, resFormat=resFormat, taskJson=dataCards[superTask], allModes=correctionModes,
         llm=llm, numSeq=7, logDir=logDir, resultDir=resultDir, customizePrompt=customizePrompt
     )
     

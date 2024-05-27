@@ -12,12 +12,13 @@ from promptarray.generator import PromptArrayGenerator
 from .llm import LLM
 from .dataloader import loadMMLU
 
-MODES = ['classify', 'correct', 'mistake', 'vote', 'array', 'single', 'reason']
+# MODES = ['classify', 'exp'] # 'correct', 'mistake', 'vote', 'array', 'single', 'reason',
+
 
 class LLMClassifier:
 
     def __init__(
-        self, task, taskJson, split, llm,
+        self, task, taskJson, split, llm, allModes,
         resFormat='default', logDir='./log', resultDir='./exp_result', numSeq=1,
         customizePrompt=False
     ):
@@ -36,8 +37,10 @@ class LLMClassifier:
         self.inputKeys = self.task_obj['input_keys']
         self.llm = llm
         self.format = resFormat
+        self.allModes = allModes
+        self.allModes.extend(['classify','correct','mistake'])
         assert(self.task_obj['task_id'] == self.task)
-        assert(self.split in ['train', 'validation', 'test'])
+        assert(self.split in ['train', 'validation', 'test', 'val'])
         assert(self.format in ['default', 'json', 'explicit'])
 
         self.outDir = f'{resultDir}/{self.llm.model_id.replace("/", "__")}__{llm.do_sample}__{llm.num_beams}__{llm.temperature}__{llm.top_k}__{llm.top_p}/{task}_{self.split}'
@@ -81,6 +84,7 @@ class LLMClassifier:
                 CORRECTION_ARRAY_TEMPLATE,
                 CORRECTION_OR_TEMPLATE,
                 CORRECTION_REASON_TEMPLATE,
+                EXP_PROMPTS
             )
 
             self.dataset = loadMMLU(task=self.subtask)
@@ -144,7 +148,7 @@ class LLMClassifier:
         self.corrReasonPrompt = '\n'.join([CORRECTION_REASON_TEMPLATE.format(
             task=self.task_obj['task_description'], choices=self._formatChoices(self.task_obj['labels'].keys())), self.outcomePrompt])
 
-
+        self.experimentPrompt = ['\n'.join([x, 'You will be provided with the input and your previous response. Read them carefully and explain your rationale.', self.outcomePrompt]) for x in EXP_PROMPTS]
         print('Classification prompt:', self.classifyPrompt, end='\n\n')
         # print( self.corrReasonPrompt)
 
@@ -258,13 +262,13 @@ class LLMClassifier:
     def _loadResults(self):
 
         self.results = {}
-        for mode in MODES:
+        for mode in self.allModes:
             self.results[mode] = pd.read_csv(f'{self.outDir}/{mode}.csv', index_col=0)
 
     def _initializeResults(self):
 
         self.results = {}
-        for mode in MODES:
+        for mode in self.allModes:
             self.results[mode] = pd.DataFrame(columns=['idx', mode, 'label', 'score'])
             self._dumpResult(mode)
 
@@ -385,7 +389,9 @@ class LLMClassifier:
 
         print(f'Classifying {idx} ...')
 
-        if idx in self.results['classify'].idx: return 1
+        if idx in self.results['classify'].idx:
+            print(f'skipping {idx} classify; exists')
+            return 1
 
         try:
 
@@ -412,9 +418,9 @@ class LLMClassifier:
 
     def correction(self, idx: str, mode: str, maxTries=2, verbose=True, **kwargs):
 
-        assert(mode in ['vote', 'array', 'single', 'reason'])
+        # assert(mode in ['vote', 'array', 'single', 'reason', 'exp'])
 
-        if idx in self.results[mode].index and not pd.isna(self.results[mode].loc[idx, mode]):
+        if idx in self.results[mode].idx:
             print(f'skipping {idx} {mode}; exists')
             return
 
@@ -476,6 +482,23 @@ class LLMClassifier:
                     idx=idx,
                     mode=mode,
                     systemPrompt=self.corrOrPrompt,
+                    fewShots=[],
+                    userPrompt=userPrompt,
+                    maxTries=maxTries,
+                    parser=self._parseClassification,
+                    **kwargs
+                )
+            except ValueError:
+                responses = []
+
+        elif 'experiment' in mode:
+            expIndex = int(mode.split('-')[-1])
+            
+            try:
+                responses = self.promptLLM(
+                    idx=idx,
+                    mode=mode,
+                    systemPrompt=self.experimentPrompt[expIndex],
                     fewShots=[],
                     userPrompt=userPrompt,
                     maxTries=maxTries,

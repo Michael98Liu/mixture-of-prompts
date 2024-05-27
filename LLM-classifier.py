@@ -2,6 +2,9 @@ import json
 import pandas as pd
 from tqdm.notebook import tqdm
 import torch
+from itertools import product
+import random
+random.seed(42)
 
 from MoP.llm import LLM
 from MoP.classifier import LLMClassifier
@@ -28,6 +31,11 @@ parser.add_argument("--temperature", type=float, default=1)
 parser.add_argument("--top_k", type=int, default=50)
 parser.add_argument("--top_p", type=float, default=1)
 
+parser.add_argument("--successive_halving", action="store_true")
+parser.add_argument("--halving_round", type=int, default=0)
+
+parser.add_argument("--experiment_mode", action="store_true")
+
 
 args = parser.parse_args()
 print('List of arguments:', args)
@@ -42,25 +50,77 @@ llm = LLM(
     top_p=args.top_p
 )
 
-if args.task == 'mmlu':
+if args.successive_halving:
+
+    assert(args.task == 'mmlu')
+    assert(args.split == 'val')
+
+    halvRound = args.halving_round
+
+    if halvRound > 0:
+        params = list(pd.read_csv(f'./succ_halv_results/round{halvRound-1}.csv').Param.values)
+        print(f'Round {halvRound}: {len(params)} in this round')
+
+    beams = [1, 4, 5, 10]
+    temps = [0.4, 0.5, 0.6, 0.7]
+    ks = [10, 30, 50]
+    ps = [0.3, 0.5, 0.7, 1]
+    sampleSize = 2**halvRound
+
     subTasks = list(loadMMLU().keys())
+    sampledTasks = random.sample(subTasks, 5)
 
-    for subtask in subTasks:
+    print("Sampled tasks", sampledTasks)
+    print('Number of samples from each task', sampleSize)
 
-        print(f'Running MMLU task: mmlu-{subtask} ...')
+    for b, t, k, p in product(beams, temps, ks, ps):
 
-        runClassification(
-            f'mmlu-{subtask}', args.split, llm,
-            resFormat=args.format,
-            logDir=args.logDir, resultDir=args.resultDir, taskFile=args.taskFile,
-            sampleSize=200
-        )
-        print('\n\n\n\n')
+        llm.set_params(b, t, k, p)
+
+        if halvRound > 0:
+            paramStr = f'{llm.do_sample}_{llm.num_beams}_{llm.temperature}_{llm.top_k}_{llm.top_p}'
+            if paramStr not in params:
+                print(f'Skipping parameter combination {paramStr}')
+                continue
+
+        for subtask in sampledTasks:
+
+            print(f'Running MMLU task: mmlu-{subtask} {llm.num_beams}__{llm.temperature}__{llm.top_k}__{llm.top_p} ...')
+
+            runClassification(
+                f'mmlu-{subtask}', args.split, llm,
+                resFormat=args.format,
+                logDir=args.logDir, resultDir=args.resultDir, taskFile=args.taskFile,
+                sampleSize=sampleSize
+            )
+            print('\n\n\n', flush=True)
+    
 else:
 
-    runClassification(
-        args.task, args.split, llm,
-        resFormat=args.format,
-        logDir=args.logDir, resultDir=args.resultDir, taskFile=args.taskFile,
-        sampleSize=200
-    )
+    if args.experiment_mode:
+        correctionModes = [f'experiment-{i}' for i in range(10)]
+        print('All correction modes', '\t'.join(correctionModes), flush=True)
+    else:
+        correctionModes = ['array', 'vote', 'single']
+
+    if args.task == 'mmlu':
+        subTasks = list(loadMMLU().keys())
+
+        for subtask in subTasks:
+
+            print(f'Running MMLU task: mmlu-{subtask} ...')
+
+            runClassification(
+                f'mmlu-{subtask}', args.split, llm,
+                resFormat=args.format,
+                logDir=args.logDir, resultDir=args.resultDir, taskFile=args.taskFile,
+                sampleSize=200, correctionModes=correctionModes
+            )
+            print('\n\n\n', flush=True)
+    else:
+        runClassification(
+            args.task, args.split, llm,
+            resFormat=args.format,
+            logDir=args.logDir, resultDir=args.resultDir, taskFile=args.taskFile,
+            sampleSize=200, correctionModes=correctionModes
+        )

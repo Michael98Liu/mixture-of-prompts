@@ -1,8 +1,9 @@
 from transformers import (
     AutoModelForCausalLM, AutoTokenizer, LlamaForCausalLM, LlamaTokenizerFast,
-    BitsAndBytesConfig, GenerationConfig
+    BitsAndBytesConfig, GenerationConfig, set_seed, pipeline
 )
-import transformers
+set_seed(42)
+
 import torch
 from peft import PeftModel
 
@@ -24,10 +25,6 @@ class LLM:
                  top_k=50,
                  top_p=1
                 ):
-
-        def useInt(x): # use integer value if possible
-            if int(x) == x: return int(x)
-            else: return x
         
         self.model_id = model_id
         self.cache_dir = result_cache_dir.format(model=self.model_id.replace('/', '_'))
@@ -40,18 +37,16 @@ class LLM:
         print(f'Model {self.model_id} loaded to', self.model.device, flush=True)
 
         self.do_sample = do_sample
-        self.num_beams = useInt(num_beams)
-        self.temperature = useInt(temperature)
-        self.top_k = useInt(top_k)
-        self.top_p = useInt(top_p)
 
         if self.do_sample==False:
             # using default values
             self.temperature = 1
             self.top_k = 50
             self.top_p = 1
+        else:
+            self.set_params(num_beams,temperature,top_k,top_p)
        
-        self.pipeline = transformers.pipeline(
+        self.pipeline = pipeline(
             "text-generation",
             model=self.model,
             tokenizer=self.tokenizer,
@@ -61,6 +56,17 @@ class LLM:
             batch_size=4
         )
 
+    def set_params(self, num_beams,temperature,top_k,top_p):
+
+        def useInt(x): # use integer value if possible
+            if int(x) == x: return int(x)
+            else: return x
+
+        self.num_beams = useInt(num_beams)
+        self.temperature = useInt(temperature)
+        self.top_k = useInt(top_k)
+        self.top_p = useInt(top_p)
+        
         
     def _load_basemodel(self, model_cache_dir):
 
@@ -141,6 +147,10 @@ class LLM:
             print('...', end='\t')
             print(messages[-50:])
 
+        # if sample and num_beams is 1 (not beam search), numSeq can be any value
+        # else if not sample and num beams is 1 (greedy), numSeq has to be 1
+        # else (here, beams is greater than 1) numSeq can be at most num_beams
+
         sequences = self.pipeline(
             messages,
             do_sample=self.do_sample,
@@ -148,7 +158,7 @@ class LLM:
             temperature=self.temperature,
             top_k=self.top_k,
             top_p=self.top_p,
-            num_return_sequences=numSeq if self.do_sample or self.num_beams>=numSeq else 1,
+            num_return_sequences=numSeq if self.do_sample and self.num_beams==1 else 1 if not self.do_sample and self.num_beams==1 else min(numSeq, self.num_beams),
             eos_token_id=self.terminators,
             pad_token_id=self.pipeline.tokenizer.eos_token_id,
             max_new_tokens=maxNewToken,

@@ -36,3 +36,16 @@ superior one. You were asked to {task}. Let's think step by step.
 Firstly, given an input, generate different rationales for each of the following choices {choices}.
 Secondly, reflect on the provided rationales and assess how logically sound they are.
 Thirdly, identify the most logical rationale and the corresponding choice.'''
+
+EXP_PROMPTS = [
+    '''Please review and critique your previous response.''',
+    '''Please review your previous response.''',
+    '''Please carefully examine the previous responses for correctness, and provide detailed feedback.''',
+    '''Please carefully examine the previous responses for errors, and provide detailed feedback.''',
+    '''Do you think the previous response is wrong or not, and if so please point out what is wrong.''',
+    '''Do you think the previous response is correct or not, and if so please point out what is correct.''',
+    '''What’s the problem with the response below?''',
+    '''Verify that the response below is correct.''',
+    '''Assume that this answer could be either correct or incorrect. Review the answer carefully and report any serious problems you find.''',
+    '''Assume that this answer could be either correct or incorrect. Review the answer carefully and report if the answer is correct.'''
+]
