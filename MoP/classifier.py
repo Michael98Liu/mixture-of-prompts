@@ -10,7 +10,7 @@ from promptarray.generate import arrayGenerate
 from promptarray.generator import PromptArrayGenerator
 
 from .llm import LLM
-from .dataloader import loadMMLU
+from .dataloader import loadMMLU, loadGSM8k, loadCSQA
 
 # MODES = ['classify', 'exp'] # 'correct', 'mistake', 'vote', 'array', 'single', 'reason',
 
@@ -37,10 +37,13 @@ class LLMClassifier:
         self.inputKeys = self.task_obj['input_keys']
         self.llm = llm
         self.format = resFormat
-        self.allModes = allModes
-        self.allModes.extend(['classify','correct','mistake'])
-        assert(self.task_obj['task_id'] == self.task)
-        assert(self.split in ['train', 'validation', 'test', 'val'])
+        self.allModes = [x for x in allModes]
+        self.allModes.extend(['classify'])
+        if 'vote' in self.allModes:
+            self.allModes.extend(['correct','mistake'])
+
+        print("Task ID:", self.task_obj['task_id'], self.task, self.subtask)
+        assert(self.split in ['train', 'validation', 'test', 'val', 'dev'])
         assert(self.format in ['default', 'json', 'explicit'])
 
         self.outDir = f'{resultDir}/{self.llm.model_id.replace("/", "__")}__{llm.do_sample}__{llm.num_beams}__{llm.temperature}__{llm.top_k}__{llm.top_p}/{task}_{self.split}'
@@ -50,11 +53,7 @@ class LLMClassifier:
         os.makedirs(self.outDir, exist_ok=True)
         os.makedirs(self.logDir, exist_ok=True)
 
-        if len(glob.glob(f'{self.outDir}/*.csv')) != 0:
-            # outfile exists
-            self._loadResults()
-        else:
-            self._initializeResults()
+        self._initializeResults() # if does not exist, initialize; if exists, load
         
         self.response = None # classification responses
         self.response_agg = '' # response as a result of majority vote
@@ -63,13 +62,14 @@ class LLMClassifier:
         self.reflections = []
         self.numSeq = numSeq # number of sequences to generate
 
-        self.outcomes = {
-            'label': [x.replace('_', ' ') for x in list(self.task_obj['labels'].keys())]
-        }
-        self.outcomeMap = {k.replace('_', ' '): v for k, v in self.task_obj['labels'].items()} # map from text to integer class label
-        self.reverseMap = {v: k for k, v in self.outcomeMap.items()} # map from integer class label to text
+        if 'labels' in self.task_obj:
+            self.outcomes = {
+                'label': [x.replace('_', ' ') for x in list(self.task_obj['labels'].keys())]
+            }
+            self.outcomeMap = {k.replace('_', ' '): v for k, v in self.task_obj['labels'].items()} # map from text to integer class label
+            self.reverseMap = {v: k for k, v in self.outcomeMap.items()} # map from integer class label to text
 
-        if self.task == 'mmlu':
+        if self.task == 'mmlu' or self.task == 'mmlu1000' or self.task == 'csqa':
             from .MMLU_prompt import (
                 FORMAT_FINAL_DECISION,
                 FORMAT_DEFAULT,
@@ -87,7 +87,32 @@ class LLMClassifier:
                 EXP_PROMPTS
             )
 
-            self.dataset = loadMMLU(task=self.subtask)
+            if self.task == 'mmlu1000':
+                dataset = loadMMLU(task=self.subtask, rootDir = '/scratch/fl1092/data_common/MMLU_1000')
+            elif self.task == 'mmlu':
+                dataset = loadMMLU(task=self.subtask)
+            elif self.task == 'csqa':
+                dataset = loadCSQA(subtask=self.subtask)
+            else:
+                print("ERROR loading multiple choice dataset")
+
+        elif self.task == "gsm8k":
+            from .GSM8K_prompt import (
+                FORMAT_DEFAULT,
+                CLASSIFICATION_TEMPLATE,
+                EXPLICIT_FEWSHOT_TEMPLATE, # placeholder
+                CORRECTION_CORRECT_TEMPLATE,
+                CORRECTION_MISTAKE_TEMPLATE,
+                CORRECTION_ARRAY_TEMPLATE,
+                CORRECTION_OR_TEMPLATE,
+            )
+
+            dataset = loadGSM8k(subtask=self.subtask)
+            print("First data entry:", dataset['test'][0])
+            
+            if self.format != 'default':
+                print('Setting output format to default')
+                self.format = 'default'
 
         else:
             from .glue_prompt import (
@@ -111,7 +136,15 @@ class LLMClassifier:
                 MNLI_CLASSIFY
             )
 
-            self.dataset = load_dataset("nyu-mll/glue", task)
+            dataset = load_dataset("nyu-mll/glue", task)
+
+        # reindex the dataset because the index of data might not start from 0 #
+        self.dataset = {}
+        for key, v in dataset.items():
+            self.dataset[key] = {}
+            for x in v:
+                self.dataset[key][x['idx']] = x
+        # finishing re-indexing #
 
         # initializing prompts for classification and fewshot #
         if self.format == 'default':
@@ -125,10 +158,15 @@ class LLMClassifier:
             self.fewShotTemplate = EXPLICIT_FEWSHOT_TEMPLATE
         # initializing prompts end #
 
-        if self.task == 'mmlu':
-            self.fewShotExamples = self._buildFewShotMMLU()
+        if self.task == 'mmlu' or self.task == 'mmlu1000' or self.task == 'csqa':
+            self.fewShotExamples = self._buildFewShotMMLU(split=self.task_obj['few_shot_split'])
+            self._parseClassification = self._classificationParser
+        elif self.task == 'gsm8k':
+            self.fewShotExamples = self._buildFewShotGSM(ids=self.task_obj['few_shot_ids'], split=self.task_obj['few_shot_split'])
+            self._parseClassification = self._GSMParser
         else:
             self.fewShotExamples = self._buildFewShotGLUE(self.task_obj['few_shot_ids'], self.task_obj['few_shot_rationale'], self.task_obj['few_shot_split'])
+            self._parseClassification = self._classificationParser
 
         if customizePrompt==False:
             self.classifyPrompt = '\n'.join([CLASSIFICATION_TEMPLATE.format(task=self.task_obj['task_description']), self.outcomePrompt])
@@ -145,12 +183,19 @@ class LLMClassifier:
         self.corrMistakePrompt = '\n'.join([CORRECTION_MISTAKE_TEMPLATE.format(task=self.task_obj['task_description']), self.outcomePrompt])
         self.corrArrayPrompt = '\n'.join([CORRECTION_ARRAY_TEMPLATE.format(task=self.task_obj['task_description']), self.outcomePrompt])
         self.corrOrPrompt = '\n'.join([CORRECTION_OR_TEMPLATE.format(task=self.task_obj['task_description']), self.outcomePrompt])
-        self.corrReasonPrompt = '\n'.join([CORRECTION_REASON_TEMPLATE.format(
-            task=self.task_obj['task_description'], choices=self._formatChoices(self.task_obj['labels'].keys())), self.outcomePrompt])
 
-        self.experimentPrompt = ['\n'.join([x, 'You will be provided with the input and your previous response. Read them carefully and explain your rationale.', self.outcomePrompt]) for x in EXP_PROMPTS]
+        try:
+            self.corrReasonPrompt = '\n'.join([CORRECTION_REASON_TEMPLATE.format(
+                task=self.task_obj['task_description'], choices=self._formatChoices(self.task_obj['labels'].keys())), self.outcomePrompt])
+        except Exception as e:
+            print("Reason mode prompt ERROR", str(e))
+
+        try:
+            self.experimentPrompt = ['\n'.join([x, 'You will be provided with the input and your previous response. Read them carefully and explain your rationale.', self.outcomePrompt]) for x in EXP_PROMPTS]
+        except Exception as e:
+            print("Experiment mode prompt ERROR", str(e))
+        
         print('Classification prompt:', self.classifyPrompt, end='\n\n')
-        # print( self.corrReasonPrompt)
 
     def _formatChoices(self, choices):
 
@@ -198,7 +243,7 @@ class LLMClassifier:
 
         return res[0], round(maxCount/len(l), 3), len(res) != 1 # response, score, and whether a tie exists
 
-    def _parseClassification(self, responses):
+    def _classificationParser(self, responses):
 
         # update self.response_agg to be the parsed result
         # return wether there is a tie or not
@@ -234,12 +279,27 @@ class LLMClassifier:
 
         return tied
 
+    def _GSMParser(self, responses):
+
+        responses = [self._cleanResponse(x, splitOn='####') for x in responses]
+        self.response_agg, self.score, tied = self._mostFrequent(responses) # aggregated as a result of majority voting
+
+        print('Classification:', self.response_agg, 'and tie exists' if tied else 'and no tie')
+
+        return tied
+
     def _buildFewShotMMLU(self, split='dev'):
 
         examples = []
 
-        for data in self.dataset[split]:
+        for idx, data in self.dataset[split].items():
+            if self.task_obj['few_shot_ids'] != []:
+                if idx not in self.task_obj['few_shot_ids']:
+                    continue
+            
             examples.append([{'role':'user', 'content': data['question']}, {'role':'assistant', 'content': data['label']}])
+
+        print(f'{len(examples)} few-shot examples prepared')
 
         return examples
 
@@ -259,18 +319,34 @@ class LLMClassifier:
         
         return examples
 
-    def _loadResults(self):
+    def _buildFewShotGSM(self, ids, split='train'):
 
-        self.results = {}
-        for mode in self.allModes:
-            self.results[mode] = pd.read_csv(f'{self.outDir}/{mode}.csv', index_col=0)
+        examples = []
+
+        for seq, idx in enumerate(ids):
+            
+            text = self.dataset[split][idx]['question']
+            response = self.dataset[split][idx]['answer']
+
+            examples.append([{'role':'user', 'content': text}, {'role':'assistant', 'content': response}])
+        
+        return examples
 
     def _initializeResults(self):
 
         self.results = {}
         for mode in self.allModes:
-            self.results[mode] = pd.DataFrame(columns=['idx', mode, 'label', 'score'])
-            self._dumpResult(mode)
+            fileName = f'{self.outDir}/{mode}.csv'
+
+            if len(glob.glob(fileName)) != 0:
+                # if exists load
+                print(f'Loading {mode} results ...', flush=True)
+                self.results[mode] = pd.read_csv(fileName, index_col=0)
+            else:
+                # if does not exist, initialize and save
+                print(f'Initializing {mode} results ...', flush=True)
+                self.results[mode] = pd.DataFrame(columns=['idx', mode, 'label', 'score'])
+                self._dumpResult(mode)
 
     def _addResult(self, idx, mode):
 
@@ -316,12 +392,15 @@ class LLMClassifier:
                     self.llm.tokenizer,
                     eos_token_id=self.llm.terminators,
                 )
-                
+
+                choiceText = 'the answer using a single number.' if self.task == 'gsm8k' else f'{self._formatChoices(self.task_obj["labels"].keys())}.'
+                sepText = '####' if self.task == 'gsm8k' else 'Therefore, my final decision is: '
+
                 jointPrompt = ''.join([
                     self.corrArrayPrompt, '\n\n',
                     userPrompt.replace('{', ' ').replace('}', ' ').replace('/','-').replace('|',' ').replace('&', '-').replace('~', '-'),
                     '\n\n',
-                    f'First explain your rationale and then output your final decision starting with "Therefore, my final decision is: ", followed by {self._formatChoices(self.task_obj["labels"].keys())}.'
+                    f'First explain your rationale and then output your final decision starting with "{sepText}", followed by ' + choiceText
                 ])
 
                 response = arrayGenerate(
@@ -349,23 +428,28 @@ class LLMClassifier:
             print('WARNING: Maximum retries reached with promptarray. Did not correct.')
             return []
 
-    def _cleanResponse(self, res):
+    def _cleanResponse(self, res, splitOn='my final decision is:'):
         
-        res = res.lower().replace('<|eot_id|>','').split('my final decision is:')[-1].strip(',.; \n\t\v\r\f')
-        res = res.split('\n')[0].strip(',.; \n\t\v\r\f')
+        res = res.lower().replace('<|eot_id|>','').split(splitOn)[-1].strip(',.; \n\t\v\r\f')
+        res = res.split('\n')[0].strip(',.;* \n\t\v\r\f')
 
         if self.task=='mmlu' and len(res) != 1:
             res = res.split('.')[0].strip()
 
         return res
 
-    def _getOneResponse(self, classification):
+    def _getOneResponse(self, classification, splitOn='my final decision is:'):
 
         for res in self.response:
+            
+            if self.task == 'gsm8k':
+                splitOn = '####'
+            else:
+                splitOn = 'my final decision is:'
 
-            cleaned = self._cleanResponse(res)
+            cleaned = self._cleanResponse(res, splitOn=splitOn)
 
-            if classification.strip().lower() == cleaned:
+            if str(classification).strip().lower() == str(cleaned):
                 return res
 
         print('Warning: cannot find the classification in any responses. Returning the first one.')
@@ -386,6 +470,13 @@ class LLMClassifier:
         print('ERROR. Cannot load previous classification from log.')
 
     def classify(self, idx, maxTries=3, **kwargs):
+
+        ### reset classifier ###
+        self.response = None
+        self.response_agg = ''
+        self.score = -1
+        self.isCorrect = None
+        ### reset classifier ###
 
         print(f'Classifying {idx} ...')
 
@@ -418,7 +509,9 @@ class LLMClassifier:
 
     def correction(self, idx: str, mode: str, maxTries=2, verbose=True, **kwargs):
 
-        # assert(mode in ['vote', 'array', 'single', 'reason', 'exp'])
+        if mode not in ['vote', 'array', 'single', 'reason'] and 'exp' not in mode:
+            print(f'mode is {mode}. Continuing ...')
+            return
 
         if idx in self.results[mode].idx:
             print(f'skipping {idx} {mode}; exists')
@@ -433,8 +526,17 @@ class LLMClassifier:
             print(f'skipping {idx} {mode}; was not able to classify')
             return
 
+        prevClassification = str(prevClassification)
+
         print(f'Mode: {mode} | Correcting {idx} ...', end='\t')
-        print(f'Previous class was {prevClassification} (i.e., {self.reverseMap[prevClassification]})')
+        print(f'Previous class was {prevClassification}', end=' ')
+        try:
+            print(f'(i.e., {self.reverseMap[prevClassification]})')
+        except Exception as e:
+            self.reverseMap = {}
+            self.reverseMap[prevClassification] = prevClassification
+
+            print(f'(i.e., {self.reverseMap[prevClassification]})')
         
         prevResponse = self._getOneResponse(classification=self.reverseMap[prevClassification])
         userPrompt = f"The input was: {self._formatInput(idx)} \nYour decision was: {self.reverseMap[prevClassification]}\nYour response was: {prevResponse}\n"
@@ -534,7 +636,7 @@ class LLMClassifier:
             else:
                 print(f'Corrected classification is {self.response_agg}')
         except Exception as e:
-            print(f"{self.task} {self.split} {idx} {mode} ERROR. Did not correct")
+            print(f"{self.task} {self.split} {idx} {mode} ERROR. Did not correct. Error is {str(e)}")
         
 
     def promptLLM(self, idx, mode, systemPrompt, fewShots, userPrompt, parser, maxTries=3, **kwargs):
@@ -568,24 +670,3 @@ class LLMClassifier:
                 
         print(f"Tried {maxTries} times and failed. ERROR")
         raise ValueError(f"Tried {maxTries} times and failed")
-
-
-    # def verify(self):
-    #     # check whether the classification is correct
-
-    #     if self.label is None:
-    #         print('Does not know ground-truth label.')
-    #         return None
-
-    #     for outcome, _ in self.outcomes.items():
-
-    #         if self.response_agg[outcome] != self.label[outcome].lower().strip():
-    #             self.isCorrect = False
-    #             return self.isCorrect
-
-    #         if self.response_agg[outcome] == 'no':
-    #             # for multiple binary classifications, only keep comparing if earlier classification is "yes"
-    #             break
-
-    #     self.isCorrect = True
-    #     return self.isCorrect

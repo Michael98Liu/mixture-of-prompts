@@ -1,4 +1,25 @@
 {
+    "csqa": {
+        "task_id": "csqa",
+        "few_shot_split": "train",
+        "few_shot_ids": [0, 1, 3, 4, 5],
+        "input_keys": ["question"],
+        "labels": {
+            "a": "a",
+            "b": "b",
+            "c": "c",
+            "d": "d",
+            "e": "e"
+        },
+        "task_description": "answer some multiple choice questions"
+    },
+    "gsm8k": {
+        "task_id": "gsm8k",
+        "few_shot_split": "train",
+        "few_shot_ids": [0, 1, 2, 3],
+        "input_keys": ["question"],
+        "task_description": "the following math problem"
+    },
     "mmlu": {
         "task_id": "mmlu",
         "few_shot_split": "dev",

@@ -9,24 +9,30 @@ from MoP.llm import LLM
 
 def runClassification(
     task, split, llm, resFormat, logDir, resultDir, taskFile,
-    correctionModes=['array', 'vote', 'single', 'reason'], customizePrompt=False, sampleSize=200
+    correctionModes=['array', 'vote', 'single'], customizePrompt=False, sampleSize=200
 ):
     
     with open(taskFile, 'r') as f:
         dataCards = json.load(f)
 
     superTask = task.split('-')[0]
+    if superTask == 'mmlu1000':
+        superTask = 'mmlu'
         
     clf = LLMClassifier(
         task=task, split=split, resFormat=resFormat, taskJson=dataCards[superTask], allModes=correctionModes,
         llm=llm, numSeq=7, logDir=logDir, resultDir=resultDir, customizePrompt=customizePrompt
     )
     
-    print(task, split, resFormat, flush=True)
+    print('Task-split-format:', task, split, resFormat, flush=True)
     
-    for idx in range(min(sampleSize, len(clf.dataset[split]))):
+    for count, idx in enumerate(clf.dataset[split].keys()):
+
+        if count >= sampleSize: break
         
         clf.classify(idx)
+        
+        print(flush=True)
         
         for mode in correctionModes: 
             clf.correction(idx, mode)
