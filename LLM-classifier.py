@@ -53,7 +53,6 @@ llm = LLM(
 if args.successive_halving:
 
     assert(args.task == 'mmlu')
-    assert(args.split == 'val')
 
     halvRound = args.halving_round
 
@@ -65,13 +64,13 @@ if args.successive_halving:
     temps = [0.4, 0.5, 0.6, 0.7]
     ks = [10, 30, 50]
     ps = [0.3, 0.5, 0.7, 1]
-    sampleSize = 2**halvRound
+    sampleSize = 2**halvRound*10
 
     subTasks = list(loadMMLU().keys())
     sampledTasks = random.sample(subTasks, 5)
 
     print("Sampled tasks", sampledTasks)
-    print('Number of samples from each task', sampleSize)
+    print('Number of samples from each task', sampleSize, flush=True)
 
     for b, t, k, p in product(beams, temps, ks, ps):
 
@@ -85,25 +84,26 @@ if args.successive_halving:
 
         for subtask in sampledTasks:
 
-            print(f'Running MMLU task: mmlu-{subtask} {llm.num_beams}__{llm.temperature}__{llm.top_k}__{llm.top_p} ...')
+            print(f'Running MMLU task: mmlu-{subtask} {llm.num_beams}__{llm.temperature}__{llm.top_k}__{llm.top_p} ...', flush=True)
 
             runClassification(
                 f'mmlu-{subtask}', args.split, llm,
                 resFormat=args.format,
                 logDir=args.logDir, resultDir=args.resultDir, taskFile=args.taskFile,
-                sampleSize=sampleSize
+                sampleSize=sampleSize,
+                correctionModes=['vote', 'single']
             )
             print('\n\n\n', flush=True)
     
 else:
 
     if args.experiment_mode:
-        correctionModes = [f'experiment-{i}' for i in range(10)]
+        correctionModes = [f'experiment-{i}' for i in range(12)]
         print('All correction modes', '\t'.join(correctionModes), flush=True)
     else:
-        correctionModes = ['array', 'vote', 'single']
+        correctionModes = ['vote', 'single', 'array'] 
 
-    if args.task == 'mmlu':
+    if args.task == 'mmlu' or args.task == 'mmlu1000':
         subTasks = list(loadMMLU().keys())
 
         for subtask in subTasks:
@@ -111,7 +111,7 @@ else:
             print(f'Running MMLU task: mmlu-{subtask} ...')
 
             runClassification(
-                f'mmlu-{subtask}', args.split, llm,
+                f'{args.task}-{subtask}', args.split, llm,
                 resFormat=args.format,
                 logDir=args.logDir, resultDir=args.resultDir, taskFile=args.taskFile,
                 sampleSize=200, correctionModes=correctionModes
