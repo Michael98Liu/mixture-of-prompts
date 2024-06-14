@@ -1,8 +1,12 @@
 from transformers import (
-    AutoModelForCausalLM, AutoTokenizer, LlamaForCausalLM, LlamaTokenizerFast,
+    AutoModelForCausalLM, AutoTokenizer, LlamaForCausalLM, LlamaTokenizerFast, GemmaTokenizerFast,
     BitsAndBytesConfig, GenerationConfig, set_seed, pipeline
 )
 set_seed(42)
+
+import google.generativeai as genai
+GOOGLE_API_KEY='AIzaSyAn6Pr68jWXny0Oa3fFH5s0m-H0B3A2HZo'
+genai.configure(api_key=GOOGLE_API_KEY)
 
 import torch
 from peft import PeftModel
@@ -10,9 +14,29 @@ from peft import PeftModel
 from tqdm.notebook import tqdm
 
 import os
+import time
 import glob
 import json
 import datetime
+
+class DummyTokenizer():
+
+    def __init__(self):
+        pass
+
+    def apply_chat_template(self, msg, *args, **kwargs):
+        res = ''
+        for m in msg:
+            if m['role'] == 'system':
+                res += m['content']
+            else:
+                res += m['role']
+                res += ': '
+                res += m['content']
+            res += '\n\n'
+        res += 'assistant: '
+        
+        return res
 
 class LLM:
     
@@ -25,16 +49,6 @@ class LLM:
                  top_k=50,
                  top_p=1
                 ):
-        
-        self.model_id = model_id
-        self.cache_dir = result_cache_dir.format(model=self.model_id.replace('/', '_'))
-        os.makedirs(self.cache_dir, exist_ok=True)
-        
-        self.tokenizer = None
-        self.model = None
-        
-        self._load_basemodel(model_cache_dir)
-        print(f'Model {self.model_id} loaded to', self.model.device, flush=True)
 
         self.do_sample = do_sample
 
@@ -45,6 +59,27 @@ class LLM:
             self.top_p = 1
         else:
             self.set_params(num_beams,temperature,top_k,top_p)
+        
+        self.model_id = model_id
+        if 'gemini' in self.model_id:
+            self.model = genai.GenerativeModel(self.model_id)
+            self.config = genai.GenerationConfig(
+                temperature=self.temperature,
+                top_p=self.top_p,
+                top_k=self.top_k
+            )
+            self.tokenizer = DummyTokenizer() # placeholder
+
+            return
+
+        self.cache_dir = result_cache_dir.format(model=self.model_id.replace('/', '_'))
+        os.makedirs(self.cache_dir, exist_ok=True)
+        
+        self.tokenizer = None
+        self.model = None
+        
+        self._load_basemodel(model_cache_dir)
+        print(f'Model {self.model_id} loaded to', self.model.device, flush=True)
        
         self.pipeline = pipeline(
             "text-generation",
@@ -140,31 +175,50 @@ class LLM:
 
         # print(maxNewToken, messages)
 
-        inputLen = len(self.pipeline.tokenizer(messages))
-        if inputLen > 4000:
-            print(f'WARNING! Input length {inputLen} exceeds 4000.')
-            print(messages[:50], end='\t')
-            print('...', end='\t')
-            print(messages[-50:])
-
         # if sample and num_beams is 1 (not beam search), numSeq can be any value
         # else if not sample and num beams is 1 (greedy), numSeq has to be 1
         # else (here, beams is greater than 1) numSeq can be at most num_beams
 
-        sequences = self.pipeline(
-            messages,
-            do_sample=self.do_sample,
-            num_beams=self.num_beams,
-            temperature=self.temperature,
-            top_k=self.top_k,
-            top_p=self.top_p,
-            num_return_sequences=numSeq if self.do_sample and self.num_beams==1 else 1 if not self.do_sample and self.num_beams==1 else min(numSeq, self.num_beams),
-            eos_token_id=self.terminators,
-            pad_token_id=self.pipeline.tokenizer.eos_token_id,
-            max_new_tokens=maxNewToken,
-        )
+        if 'gemini' in self.model_id:
+            
+            try:
+                response = self.model.generate_content(
+                    messages,
+                    generation_config=self.config
+                )
+            except Exception as e:
+                print(e, flush=True)
 
-        response = [seq['generated_text'][len(messages):].strip() for seq in sequences] # sequences[0]['generated_text'][-1]['content'] 
+                if str(e) == '429 Resource has been exhausted (e.g. check quota).':
+                    time.sleep(36000)
+
+            time.sleep(20)
+            response = [response.text]
+
+
+        else:
+
+            inputLen = len(self.pipeline.tokenizer(messages))
+            if inputLen > 4000:
+                print(f'WARNING! Input length {inputLen} exceeds 4000.')
+                print(messages[:50], end='\t')
+                print('...', end='\t')
+                print(messages[-50:])
+
+            sequences = self.pipeline(
+                messages,
+                do_sample=self.do_sample,
+                num_beams=self.num_beams,
+                temperature=self.temperature,
+                top_k=self.top_k,
+                top_p=self.top_p,
+                num_return_sequences=numSeq if self.do_sample and self.num_beams==1 else 1 if not self.do_sample and self.num_beams==1 else min(numSeq, self.num_beams),
+                eos_token_id=self.terminators,
+                pad_token_id=self.pipeline.tokenizer.eos_token_id,
+                max_new_tokens=maxNewToken,
+            )
+
+            response = [seq['generated_text'][len(messages):].strip() for seq in sequences] # sequences[0]['generated_text'][-1]['content'] 
 
         if cache:
             with open(f'{self.cache_dir}{str(datetime.datetime.now())}.json', 'w+') as f:
