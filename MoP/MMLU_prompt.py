@@ -38,14 +38,16 @@ Secondly, reflect on the provided rationales and assess how logically sound they
 Thirdly, identify the most logical rationale and the corresponding choice.'''
 
 EXP_PROMPTS = [
-    '''Please review and critique your previous response.''',
-    '''Please review your previous response.''',
-    '''Please carefully examine the previous responses for correctness, and provide detailed feedback.''',
-    '''Please carefully examine the previous responses for errors, and provide detailed feedback.''',
-    '''Do you think the previous response is wrong or not, and if so please point out what is wrong.''',
-    '''Do you think the previous response is correct or not, and if so please point out what is correct.''',
     '''What’s the problem with the response below?''',
     '''Verify that the response below is correct.''',
     '''Assume that this answer could be either correct or incorrect. Review the answer carefully and report any serious problems you find.''',
-    '''Assume that this answer could be either correct or incorrect. Review the answer carefully and report if the answer is correct.'''
+    '''Assume that this answer could be either correct or incorrect. Review the answer carefully and report if the answer is correct.''',
+    '''Please carefully examine the previous responses to verify their correctness, and provide detailed feedback.''',
+    '''Please carefully examine the previous responses to identify any errors, and provide detailed feedback.''',
+    '''Do you think the previous response is wrong or not, and if so please point out what is wrong.''',
+    '''Do you think the previous response is correct or not, and if so please point out what is correct.''',
+    '''Please review and critique your previous response.''', # new
+    '''Please review and appraise your previous response.''', # new
+    '''Please carefully examine the previous responses, and provide detailed feedback.''', # new
+    '''Please carefully examine the previous responses to identify any errors, and provide detailed feedback.''', # new,
 ]
