@@ -3,7 +3,6 @@ res_*/
 tasks*.json
 *.log
 older_experiments/
-*.ipynb
 
 
 *.bundle.*

@@ -1,0 +1,5 @@
+,idx,array,label,score
+1,1,b,b,1.0
+2,2,c,c,1.0
+4,4,b,c,1.0
+8,8,c,b,1.0
