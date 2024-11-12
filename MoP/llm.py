@@ -5,7 +5,7 @@ from transformers import (
 set_seed(42)
 
 import google.generativeai as genai
-GOOGLE_API_KEY='AIzaSyAn6Pr68jWXny0Oa3fFH5s0m-H0B3A2HZo'
+GOOGLE_API_KEY=''
 genai.configure(api_key=GOOGLE_API_KEY)
 
 import torch
