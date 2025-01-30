@@ -3,6 +3,88 @@ import json
 import numpy as np
 import pandas as pd
 
+def loadIdeology(
+    trainDir='/scratch/fl1092/code_ideology_of_science/data',
+    testDir='/scratch/fl1092/altmetrics_political_leaning',
+    classifiedDir='/scratch/fl1092/code_ideology_of_science/res_ideology/gemini-1.5-flash__True__1__0.6__10__0.3',
+    subtask=None
+):
+    
+    data = {'train': [], 'test': []}
+
+    ## load train ##
+    if subtask == 'climate':
+        columns=['Abstract', 'ClimateRationale', 'IsClimate']
+        colMap = {'ClimateRationale': 'rationale', 'IsClimate': 'label'}
+    elif subtask == 'climateSolution':
+        columns=['Abstract', 'SolutionRationale', 'IsClimate', 'IsSolution']
+        colMap = {'SolutionRationale': 'rationale', 'IsSolution': 'label'}
+    elif subtask == 'climateSolutionEmission':
+        columns=['Abstract', 'SolutionRationale', 'IsSolution', 'IsEmission']
+        colMap = {'SolutionRationale': 'rationale', 'IsEmission': 'label'}
+    elif subtask == 'climateImpact':
+        columns=['Abstract', 'ImpactRationale', 'IsClimate', 'IsImpact']
+        colMap = {'ImpactRationale': 'rationale', 'IsImpact': 'label'}
+    elif subtask == 'climateImpactNegative':
+        columns=['Abstract', 'ImpactRationale', 'IsImpact', 'IsNegative']
+        colMap = {'ImpactRationale': 'rationale', 'IsNegative': 'label'}
+    elif subtask == 'climateImpactAlarmism':
+        columns=['Abstract', 'ImpactRationale', 'IsImpact', 'IsAlarmism']
+        colMap = {'ImpactRationale': 'rationale', 'IsAlarmism': 'label'}
+    else:
+        raise Exception('Undefined task')
+
+    df = (
+        pd.read_csv(f'{trainDir}/Manual-ClimatePaper-Paper-Classification-May8.csv', usecols=columns)
+        .head(50).fillna('nan')
+        .rename(columns=colMap)
+    )
+
+    if subtask == 'climateSolution' or subtask == 'climateImpact':
+        df = df.query('IsClimate == "Yes"')
+    elif subtask == 'climateSolutionEmission':
+        df = df.query('IsSolution == "Yes"')
+    elif subtask == 'climateImpactNegative' or subtask == 'climateImpactAlarmism':
+        df = df.query('IsImpact == "Yes"')
+
+    print("Shape of training data: ", df.shape)
+
+    for ind, row in df.iterrows():
+        data['train'].append({'idx': ind, 'text': row['Abstract'], 'rationale': row['rationale'], 'label': row['label'].lower()})
+    ## load train finished ##
+
+
+    ## load test ##
+    df = (
+        pd.read_csv(f'{testDir}/ClimatePapersAbstractJan18.csv')
+        .dropna(subset=['DOI','Title','Abstract'])
+        .query('Abstract != "UNKNWON ABSTRACT"')
+        .query('Abstract != "MORE THAN ONE MATCH"')
+        .query('Abstract != ""')
+    )
+
+    if subtask == 'climateSolution' or subtask == 'climateImpact':
+        classified = pd.read_csv(f'{classifiedDir}/ideology_climate_test/classify.csv',index_col=0).rename(columns={'idx':'ID'})
+        df = df.merge(classified, on='ID').query('classify == "yes"')
+
+    elif subtask == 'climateSolutionEmission':
+        classified = pd.read_csv(f'{classifiedDir}/ideology_climateSolution_test/classify.csv',index_col=0).rename(columns={'idx':'ID'})
+        df = df.merge(classified, on='ID').query('classify == "yes"')
+
+    elif subtask == 'climateImpactNegative' or subtask == 'climateImpactAlarmism':
+        classified = pd.read_csv(f'{classifiedDir}/ideology_climateImpact_test/classify.csv',index_col=0).rename(columns={'idx':'ID'})
+        df = df.merge(classified, on='ID').query('classify == "yes"')
+
+    # load result from previous steps to #
+
+    print("Shape of test data: ", df.shape)
+
+    for ind, row in df.iterrows():
+        data['test'].append({'idx': row['ID'], 'text': row['Abstract'], 'label': ''})
+
+    return data
+
+
 def loadGSM8k(rootDir = '/scratch/fl1092/data_common/grade-school-math/grade_school_math/data', subtask=None, returnTask=None):
     
     data = {}

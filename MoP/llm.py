@@ -5,6 +5,7 @@ from transformers import (
 set_seed(42)
 
 import google.generativeai as genai
+import openai
 GOOGLE_API_KEY=''
 genai.configure(api_key=GOOGLE_API_KEY)
 
@@ -47,8 +48,21 @@ class LLM:
                  num_beams=1,
                  temperature=1,
                  top_k=50,
-                 top_p=1
+                 top_p=1,
+                 load_4bit=False,
+                 load_8bit=False,
+                 GOOGLE_API_KEY=None,
+                 OPENAI_API_KEY=None
                 ):
+
+        if 'gemini' in model_id:
+            genai.configure(api_key=GOOGLE_API_KEY)
+
+        if 'gpt' in model_id:
+            self.client = openai.OpenAI(
+                api_key = OPENAI_API_KEY,
+                organization = 'org-k9jtNkEGXTcsCvukr8Z152FQ'
+            )
 
         self.do_sample = do_sample
 
@@ -61,6 +75,9 @@ class LLM:
             self.set_params(num_beams,temperature,top_k,top_p)
         
         self.model_id = model_id
+        self.cache_dir = result_cache_dir.format(model=self.model_id.replace('/', '_'))
+        os.makedirs(self.cache_dir, exist_ok=True)
+
         if 'gemini' in self.model_id:
             self.model = genai.GenerativeModel(self.model_id)
             self.config = genai.GenerationConfig(
@@ -71,14 +88,15 @@ class LLM:
             self.tokenizer = DummyTokenizer() # placeholder
 
             return
+        elif 'gpt' in self.model_id:
+            self.tokenizer = DummyTokenizer()
 
-        self.cache_dir = result_cache_dir.format(model=self.model_id.replace('/', '_'))
-        os.makedirs(self.cache_dir, exist_ok=True)
-        
+            return 
+
         self.tokenizer = None
         self.model = None
         
-        self._load_basemodel(model_cache_dir)
+        self._load_basemodel(model_cache_dir, load_4bit=load_4bit, load_8bit=load_8bit)
         print(f'Model {self.model_id} loaded to', self.model.device, flush=True)
        
         self.pipeline = pipeline(
@@ -103,19 +121,27 @@ class LLM:
         self.top_p = useInt(top_p)
         
         
-    def _load_basemodel(self, model_cache_dir):
+    def _load_basemodel(self, model_cache_dir, load_8bit, load_4bit):
 
         bnb_config = BitsAndBytesConfig(
-            load_in_8bit=True,
+            load_in_8bit=load_8bit,
+            load_in_4bit=load_4bit,
             bnb_8bit_compute_dtype=torch.float16,
+            bnb_4bit_compute_dtype=torch.float16,
         )
         
         self.tokenizer = AutoTokenizer.from_pretrained(
             self.model_id, cache_dir=model_cache_dir, device_map="auto"
         )
-        self.model = AutoModelForCausalLM.from_pretrained(
-            self.model_id, cache_dir=model_cache_dir, device_map="auto", quantization_config=bnb_config
-        )
+
+        if load_4bit==False and load_8bit==False:
+            self.model = AutoModelForCausalLM.from_pretrained(
+                self.model_id, cache_dir=model_cache_dir, device_map="auto"
+            )
+        else:
+            self.model = AutoModelForCausalLM.from_pretrained(
+                self.model_id, cache_dir=model_cache_dir, device_map="auto", quantization_config=bnb_config
+            )
 
         if 'Llama-3' in self.model_id:
             self.terminators = GenerationConfig.from_pretrained(
@@ -180,6 +206,8 @@ class LLM:
         # else (here, beams is greater than 1) numSeq can be at most num_beams
 
         if 'gemini' in self.model_id:
+
+            messages = self.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
             
             try:
                 response = self.model.generate_content(
@@ -190,13 +218,28 @@ class LLM:
                 print(e, flush=True)
 
                 if str(e) == '429 Resource has been exhausted (e.g. check quota).':
+                    print('Sleeping ... ')
                     time.sleep(36000)
 
-            time.sleep(20)
+                response = [str(e)]
+
+            time.sleep(5)
             response = [response.text]
+
+        elif 'gpt' in self.model_id:
+
+            response = self.client.chat.completions.create(
+                model=self.model_id,
+                messages=messages,
+                temperature=self.temperature,
+            )
+
+            response = [response.choices[0].message.content]
 
 
         else:
+
+            messages = self.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
 
             inputLen = len(self.pipeline.tokenizer(messages))
             if inputLen > 4000:
