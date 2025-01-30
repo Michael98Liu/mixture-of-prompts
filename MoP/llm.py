@@ -6,6 +6,8 @@ set_seed(42)
 
 import google.generativeai as genai
 import openai
+GOOGLE_API_KEY=''
+genai.configure(api_key=GOOGLE_API_KEY)
 
 import torch
 from peft import PeftModel
