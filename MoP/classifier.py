@@ -10,7 +10,7 @@ from promptarray.generate import arrayGenerate
 from promptarray.generator import PromptArrayGenerator
 
 from .llm import LLM
-from .dataloader import loadMMLU, loadGSM8k, loadCSQA
+from .dataloader import loadMMLU, loadGSM8k, loadCSQA, loadIdeology
 
 # MODES = ['classify', 'exp'] # 'correct', 'mistake', 'vote', 'array', 'single', 'reason',
 
@@ -113,6 +113,25 @@ class LLMClassifier:
             if self.format != 'default':
                 print('Setting output format to default')
                 self.format = 'default'
+        elif 'ideology' in task:
+            from .ideology_climate_prompt import (
+                FORMAT_FINAL_DECISION,
+                EXPLICIT_FEWSHOT_TEMPLATE,
+                CLASSIFICATION_TEMPLATE_SIMPLE,
+                CLASSIFICATION_TEMPLATE_EXTENDED,
+            )
+
+            if task in ['ideology_climate', 'ideology_climateImpactNegative']:
+                CLASSIFICATION_TEMPLATE = CLASSIFICATION_TEMPLATE_SIMPLE
+            elif task in ['ideology_climateSolution', 'ideology_climateSolutionEmission', 'ideology_climateImpact', 'ideology_climateImpactAlarmism']:
+                CLASSIFICATION_TEMPLATE = CLASSIFICATION_TEMPLATE_EXTENDED
+            else:
+                raise Exception(f'Undefined task {task}')
+
+            dataset = loadIdeology(subtask=task.split('_')[-1])
+            if self.format != 'explicit':
+                self.format = 'explicit'
+                print(f'Setting output format to {self.format}')
 
         else:
             from .glue_prompt import (
@@ -164,6 +183,9 @@ class LLMClassifier:
         elif self.task == 'gsm8k':
             self.fewShotExamples = self._buildFewShotGSM(ids=self.task_obj['few_shot_ids'], split=self.task_obj['few_shot_split'])
             self._parseClassification = self._GSMParser
+        elif 'ideology' in task:
+            self.fewShotExamples = self._buildFewShotIdeology(ids=self.task_obj['few_shot_ids'], split=self.task_obj['few_shot_split'])
+            self._parseClassification = self._classificationParser
         else:
             self.fewShotExamples = self._buildFewShotGLUE(self.task_obj['few_shot_ids'], self.task_obj['few_shot_rationale'], self.task_obj['few_shot_split'])
             self._parseClassification = self._classificationParser
@@ -179,10 +201,13 @@ class LLMClassifier:
             else:
                 raise ValueError('Customized prompt undefined for task')
 
-        self.corrCorrectPrompt = '\n'.join([CORRECTION_CORRECT_TEMPLATE.format(task=self.task_obj['task_description']), self.outcomePrompt])
-        self.corrMistakePrompt = '\n'.join([CORRECTION_MISTAKE_TEMPLATE.format(task=self.task_obj['task_description']), self.outcomePrompt])
-        self.corrArrayPrompt = '\n'.join([CORRECTION_ARRAY_TEMPLATE.format(task=self.task_obj['task_description']), self.outcomePrompt])
-        self.corrOrPrompt = '\n'.join([CORRECTION_OR_TEMPLATE.format(task=self.task_obj['task_description']), self.outcomePrompt])
+        try:
+            self.corrCorrectPrompt = '\n'.join([CORRECTION_CORRECT_TEMPLATE.format(task=self.task_obj['task_description']), self.outcomePrompt])
+            self.corrMistakePrompt = '\n'.join([CORRECTION_MISTAKE_TEMPLATE.format(task=self.task_obj['task_description']), self.outcomePrompt])
+            self.corrArrayPrompt = '\n'.join([CORRECTION_ARRAY_TEMPLATE.format(task=self.task_obj['task_description']), self.outcomePrompt])
+            self.corrOrPrompt = '\n'.join([CORRECTION_OR_TEMPLATE.format(task=self.task_obj['task_description']), self.outcomePrompt])
+        except Exception as e:
+            print("Correction prompt ERROR", str(e))
 
         try:
             self.corrReasonPrompt = '\n'.join([CORRECTION_REASON_TEMPLATE.format(
@@ -312,6 +337,22 @@ class LLMClassifier:
             text = self._formatInput(idx, split=split)
             response = self.fewShotTemplate.format(
                 rationale=self.task_obj['few_shot_rationale'][seq],
+                label=self.reverseMap[self.dataset[split][idx]['label']]
+            )
+
+            examples.append([{'role':'user', 'content': text}, {'role':'assistant', 'content': response}])
+        
+        return examples
+
+    def _buildFewShotIdeology(self, ids, split='train'):
+
+        examples = []
+
+        for seq, idx in enumerate(ids):
+
+            text = self.dataset[split][idx]['text']
+            response = self.fewShotTemplate.format(
+                rationale=self.dataset[split][idx]['rationale'], #self.task_obj['few_shot_rationale'][seq],
                 label=self.reverseMap[self.dataset[split][idx]['label']]
             )
 
@@ -656,7 +697,7 @@ class LLMClassifier:
         tries = 0
         while tries < maxTries:
             try:
-                response = self.llm.prompt(formatted, numSeq=self.numSeq, **kwargs)
+                response = self.llm.prompt(messages, numSeq=self.numSeq, **kwargs)
                 parser(response) # ensure that the outcome is the right format
 
                 self._recordLog(idx=idx, mode=mode, prompt=formatted, response=response, trial=tries, classification=self.response_agg, success=True)
